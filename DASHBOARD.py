@@ -211,8 +211,16 @@ elif page == "Vue Détaillée 🔍":
         st.stop()
 
     # --- NOUVEAU : Jauge de Dividende ---
-    def plot_dividend_gauge(yield_val):
-        val = yield_val * 100 # Conversion en %
+def plot_dividend_gauge(yield_val):
+        # --- CORRECTION ICI ---
+        # Si la valeur est très petite (ex: 0.05), c'est un décimal -> on met en % (*100)
+        # Si la valeur est > 0.5, c'est probablement déjà un pourcentage -> on laisse tel quel
+        if yield_val is None:
+            val = 0
+        else:
+            val = yield_val * 100 if yield_val < 0.5 else yield_val
+        # ----------------------
+
         fig = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = val,
@@ -319,3 +327,4 @@ elif page == "Vue Détaillée 🔍":
                     col = '#2ecc71' if data_idx.iloc[-1] > data_idx.iloc[0] else '#e74c3c'
                     c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True, config={'displayModeBar': False})
                 st.divider()
+
