@@ -72,16 +72,12 @@ def get_detail_data(symbol, period="1y"):
         stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
         
-        # On utilise stock.info pour les données fondamentales (un peu plus lent mais riche)
-        # On gère les cas où la donnée est manquante (None)
+        # On utilise stock.info pour les données fondamentales
         inf = stock.info
         
         # Récupération sécurisée du dividende et du PER
         dividend_yield = inf.get('dividendYield', 0)
-        if dividend_yield is None: dividend_yield = 0
-        
         trailing_pe = inf.get('trailingPE', 0)
-        if trailing_pe is None: trailing_pe = 0
         
         # Fast info pour le prix temps réel (plus fiable)
         fi = stock.fast_info
@@ -90,7 +86,7 @@ def get_detail_data(symbol, period="1y"):
             "last": fi.last_price, 
             "prev": fi.previous_close,
             "mcap": fi.market_cap,
-            "dividend": dividend_yield, # Format 0.05 pour 5%
+            "dividend": dividend_yield,
             "per": trailing_pe
         }
         return hist, info_dict
@@ -210,17 +206,16 @@ elif page == "Vue Détaillée 🔍":
         st.error("Données indisponibles.")
         st.stop()
 
-    # --- NOUVEAU : Jauge de Dividende ---
-def plot_dividend_gauge(yield_val):
-        # --- CORRECTION ICI ---
-        # Si la valeur est très petite (ex: 0.05), c'est un décimal -> on met en % (*100)
-        # Si la valeur est > 0.5, c'est probablement déjà un pourcentage -> on laisse tel quel
+    # --- JAUGE DIVIDENDE CORRIGÉE ---
+    def plot_dividend_gauge(yield_val):
+        # Correction pour éviter le "186%"
         if yield_val is None:
             val = 0
         else:
+            # Si valeur < 0.5 (ex: 0.05), on multiplie par 100 pour avoir le %.
+            # Si valeur > 0.5, on suppose que c'est déjà un % (Yahoo est parfois incohérent)
             val = yield_val * 100 if yield_val < 0.5 else yield_val
-        # ----------------------
-
+            
         fig = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = val,
@@ -274,7 +269,6 @@ def plot_dividend_gauge(yield_val):
 
     with col_left:
         with st.container():
-            # REMPLACEMENT DU VOLUME PAR DIVIDENDE + PER
             st.write("##### Rendement & Valorisation")
             
             # 1. Jauge Dividende
@@ -283,7 +277,7 @@ def plot_dividend_gauge(yield_val):
             # 2. Indicateur PER en dessous
             st.divider()
             per_val = info['per']
-            per_str = f"{per_val:.1f}x" if per_val > 0 else "N/A"
+            per_str = f"{per_val:.1f}x" if per_val and per_val > 0 else "N/A"
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique. En dessous c'est 'pas cher', au dessus de 25 c'est 'cher' (ou en forte croissance).")
 
         with st.container():
@@ -327,4 +321,3 @@ def plot_dividend_gauge(yield_val):
                     col = '#2ecc71' if data_idx.iloc[-1] > data_idx.iloc[0] else '#e74c3c'
                     c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True, config={'displayModeBar': False})
                 st.divider()
-
