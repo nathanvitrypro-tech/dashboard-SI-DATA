@@ -108,7 +108,7 @@ if st.sidebar.button("🔄 Actualiser tout"):
 # PAGE 1 : VUE GLOBALE
 # =========================================================
 if page == "Vue Globale 🌍":
-    st.title("🌍 Vue d'ensemble du Marché")
+    st.title("🌍 Vue d'ensemble du CAC 40")
 
     with st.spinner("Analyse du marché en cours..."):
         df_global = get_global_data()
@@ -296,4 +296,5 @@ elif page == "Vue Détaillée 🔍":
                     col = '#2ecc71' if data_idx.iloc[-1] > data_idx.iloc[0] else '#e74c3c'
                     c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True,
                                             config={'displayModeBar': False})
+
                 st.divider()
