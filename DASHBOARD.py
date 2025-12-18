@@ -28,9 +28,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# LISTE MISE À JOUR (Avec Société Générale et Veolia)
 tickers = {
     "LVMH": "MC.PA", "TOTAL": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
     "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA", 
+    "SOCIETE GENERALE": "GLE.PA", "VEOLIA": "VIE.PA", # Veolia remplace Suez (retiré de la cote)
     "AXA": "CS.PA", "VINCI": "DG.PA", "SAFRAN": "SAF.PA", "HERMES": "RMS.PA", 
     "KERING": "KER.PA", "SANOFI": "SAN.PA", "ESSILOR": "EL.PA", "ORANGE": "ORA.PA",
     "RENAULT": "RNO.PA", "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA"
@@ -69,7 +71,6 @@ def get_detail_data(symbol, period="1y"):
     """Données complètes avec période dynamique pour la vue détaillée"""
     try:
         stock = yf.Ticker(symbol)
-        # On utilise le paramètre 'period' ici
         hist = stock.history(period=period)
         fi = stock.fast_info
         info = {
@@ -116,12 +117,11 @@ if page == "Vue Globale 🌍":
     
     st.divider()
 
-    # --- Comparateur Graphique (Avec Sélecteur) ---
+    # --- Comparateur Graphique ---
     st.subheader("📈 Comparateur de Performance (Base 100)")
     col_conf1, col_conf2 = st.columns([1, 2])
     
     with col_conf1:
-        # AJOUT DE "10 Ans" ICI
         time_period_global = st.radio(
             "Période Globale :", 
             ["1 Mois", "3 Mois", "6 Mois", "1 An", "5 Ans", "10 Ans"], 
@@ -188,15 +188,14 @@ elif page == "Vue Détaillée 🔍":
     selected_name = st.sidebar.selectbox("Choisir une entreprise :", list(tickers.keys()))
     symbol = tickers[selected_name]
 
-    # --- SÉLECTEUR DE PÉRIODE (AVEC 10 ANS) ---
+    # --- SÉLECTEUR DE PÉRIODE ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("Période d'analyse")
     
-    # AJOUT DE "10 Ans" ICI
     time_period_detail = st.sidebar.radio(
         "Choisir la durée :",
         ["1 Mois", "3 Mois", "6 Mois", "1 An", "2 Ans", "5 Ans", "10 Ans"],
-        index=3 # Par défaut sur 1 An
+        index=3
     )
     period_map_detail = {
         "1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", 
@@ -204,9 +203,8 @@ elif page == "Vue Détaillée 🔍":
     }
     selected_yahoo_period_detail = period_map_detail[time_period_detail]
 
-    # --- Chargement des données avec la période choisie ---
+    # --- Chargement ---
     with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
-        # On passe la période sélectionnée à la fonction
         hist, info = get_detail_data(symbol, period=selected_yahoo_period_detail)
         cac40 = get_index_data("^FCHI")
         sp500 = get_index_data("^GSPC")
@@ -216,7 +214,7 @@ elif page == "Vue Détaillée 🔍":
         st.error("Données indisponibles pour cette période.")
         st.stop()
 
-    # --- Fonctions Graphiques Locales ---
+    # --- Fonctions Graphiques ---
     def plot_donut_volume(vol_today, vol_avg):
         values = [vol_today, max(0, vol_avg - vol_today)]
         colors = ['#2ecc71', '#ecf0f1']
@@ -229,7 +227,6 @@ elif page == "Vue Détaillée 🔍":
     def plot_performance_bars(hist):
         last = hist['Close'].iloc[-1]
         def get_var(days):
-            # Vérification si assez de données pour la période demandée
             if len(hist) > days: return ((last - hist['Close'].iloc[-days]) / hist['Close'].iloc[-days]) * 100
             return 0
         perfs = [{'Label': '1 Sem', 'V': get_var(5)}, {'Label': '1 Mois', 'V': get_var(20)}, 
@@ -240,10 +237,8 @@ elif page == "Vue Détaillée 🔍":
         return fig
 
     def plot_candlestick_real(df):
-        # La moyenne mobile s'adapte à la longueur des données
         window = 50 if len(df) > 200 else (20 if len(df) > 50 else 5)
         df['MA'] = df['Close'].rolling(window=window).mean()
-        
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='OHLC'))
         fig.add_trace(go.Scatter(x=df.index, y=df['MA'], line=dict(color='orange', width=1), name=f'Moy {window}j'))
@@ -256,7 +251,7 @@ elif page == "Vue Détaillée 🔍":
         fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=50, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         return fig
 
-    # --- MISE EN PAGE DÉTAILLÉE ---
+    # --- MISE EN PAGE ---
     st.title(f"📊 Analyse Focus : {selected_name}")
 
     col_left, col_mid, col_right = st.columns([1, 1.5, 1.5], gap="medium")
