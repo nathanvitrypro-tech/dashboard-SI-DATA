@@ -14,7 +14,6 @@ st.markdown("""
     <style>
     .stApp { background-color: #f0f2f6; }
     
-    /* Style des cartes */
     div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
         background-color: white;
         padding: 20px;
@@ -28,11 +27,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# LISTE MISE À JOUR (Avec Société Générale et Veolia)
 tickers = {
     "LVMH": "MC.PA", "TOTAL": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
     "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA", 
-    "SOCIETE GENERALE": "GLE.PA", "VEOLIA": "VIE.PA", # Veolia remplace Suez (retiré de la cote)
+    "SOCIETE GENERALE": "GLE.PA", "VEOLIA": "VIE.PA",
     "AXA": "CS.PA", "VINCI": "DG.PA", "SAFRAN": "SAF.PA", "HERMES": "RMS.PA", 
     "KERING": "KER.PA", "SANOFI": "SAN.PA", "ESSILOR": "EL.PA", "ORANGE": "ORA.PA",
     "RENAULT": "RNO.PA", "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA"
@@ -61,25 +59,43 @@ def get_global_data():
 
 @st.cache_data(ttl=3600)
 def get_multi_history(tickers_dict, period="1y"):
-    """Télécharge l'historique groupé avec période dynamique"""
     symbols = list(tickers_dict.values())
     data = yf.download(symbols, period=period, progress=False)['Close']
     return data
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol, period="1y"):
-    """Données complètes avec période dynamique pour la vue détaillée"""
+    """
+    Récupère l'historique ET les infos fondamentales (Dividende, PER).
+    """
     try:
         stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
+        
+        # On utilise stock.info pour les données fondamentales (un peu plus lent mais riche)
+        # On gère les cas où la donnée est manquante (None)
+        inf = stock.info
+        
+        # Récupération sécurisée du dividende et du PER
+        dividend_yield = inf.get('dividendYield', 0)
+        if dividend_yield is None: dividend_yield = 0
+        
+        trailing_pe = inf.get('trailingPE', 0)
+        if trailing_pe is None: trailing_pe = 0
+        
+        # Fast info pour le prix temps réel (plus fiable)
         fi = stock.fast_info
-        info = {
-            "last": fi.last_price, "prev": fi.previous_close,
-            "open": fi.open, "mcap": fi.market_cap,
-            "vol_avg": fi.three_month_average_volume
+        
+        info_dict = {
+            "last": fi.last_price, 
+            "prev": fi.previous_close,
+            "mcap": fi.market_cap,
+            "dividend": dividend_yield, # Format 0.05 pour 5%
+            "per": trailing_pe
         }
-        return hist, info
-    except:
+        return hist, info_dict
+    except Exception as e:
+        print(e)
         return None, None
 
 @st.cache_data(ttl=3600)
@@ -117,21 +133,12 @@ if page == "Vue Globale 🌍":
     
     st.divider()
 
-    # --- Comparateur Graphique ---
     st.subheader("📈 Comparateur de Performance (Base 100)")
     col_conf1, col_conf2 = st.columns([1, 2])
     
     with col_conf1:
-        time_period_global = st.radio(
-            "Période Globale :", 
-            ["1 Mois", "3 Mois", "6 Mois", "1 An", "5 Ans", "10 Ans"], 
-            index=3, 
-            horizontal=True
-        )
-        period_map_global = {
-            "1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", 
-            "1 An": "1y", "5 Ans": "5y", "10 Ans": "10y"
-        }
+        time_period_global = st.radio("Période Globale :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "5 Ans", "10 Ans"], index=3, horizontal=True)
+        period_map_global = {"1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", "1 An": "1y", "5 Ans": "5y", "10 Ans": "10y"}
         selected_yahoo_period_global = period_map_global[time_period_global]
 
     with col_conf2:
@@ -155,11 +162,10 @@ if page == "Vue Globale 🌍":
                                legend=dict(orientation="h", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_comp, use_container_width=True)
     else:
-        st.info("Sélectionnez au moins une entreprise pour voir le graphique.")
+        st.info("Sélectionnez au moins une entreprise.")
     
     st.divider()
     
-    # --- Tableau et Treemap ---
     c1, c2 = st.columns([1.5, 1])
     with c1:
         st.subheader("📊 Tableau des Prix")
@@ -188,22 +194,12 @@ elif page == "Vue Détaillée 🔍":
     selected_name = st.sidebar.selectbox("Choisir une entreprise :", list(tickers.keys()))
     symbol = tickers[selected_name]
 
-    # --- SÉLECTEUR DE PÉRIODE ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("Période d'analyse")
-    
-    time_period_detail = st.sidebar.radio(
-        "Choisir la durée :",
-        ["1 Mois", "3 Mois", "6 Mois", "1 An", "2 Ans", "5 Ans", "10 Ans"],
-        index=3
-    )
-    period_map_detail = {
-        "1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", 
-        "1 An": "1y", "2 Ans": "2y", "5 Ans": "5y", "10 Ans": "10y"
-    }
+    time_period_detail = st.sidebar.radio("Choisir la durée :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "2 Ans", "5 Ans", "10 Ans"], index=3)
+    period_map_detail = {"1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", "1 An": "1y", "2 Ans": "2y", "5 Ans": "5y", "10 Ans": "10y"}
     selected_yahoo_period_detail = period_map_detail[time_period_detail]
 
-    # --- Chargement ---
     with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
         hist, info = get_detail_data(symbol, period=selected_yahoo_period_detail)
         cac40 = get_index_data("^FCHI")
@@ -211,17 +207,29 @@ elif page == "Vue Détaillée 🔍":
         bitcoin = get_index_data("BTC-EUR")
 
     if hist is None or hist.empty:
-        st.error("Données indisponibles pour cette période.")
+        st.error("Données indisponibles.")
         st.stop()
 
-    # --- Fonctions Graphiques ---
-    def plot_donut_volume(vol_today, vol_avg):
-        values = [vol_today, max(0, vol_avg - vol_today)]
-        colors = ['#2ecc71', '#ecf0f1']
-        fig = go.Figure(data=[go.Pie(labels=['Vol Day', 'Rest'], values=values, hole=.6, marker=dict(colors=colors), sort=False)])
-        fig.update_layout(margin=dict(t=30, b=0, l=0, r=0), height=250, showlegend=False)
-        vol_str = f"{vol_today/1e6:.1f}M" if vol_today > 1e6 else f"{vol_today/1e3:.0f}K"
-        fig.add_annotation(text=f"<b>Volume</b><br>{vol_str}", x=0.5, y=0.5, font_size=16, showarrow=False)
+    # --- NOUVEAU : Jauge de Dividende ---
+    def plot_dividend_gauge(yield_val):
+        val = yield_val * 100 # Conversion en %
+        fig = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = val,
+            title = {'text': "Rendement Dividende (Annuel)"},
+            number = {'suffix': "%", 'font': {'size': 26}},
+            gauge = {
+                'axis': {'range': [None, 8], 'tickwidth': 1},
+                'bar': {'color': "#2ecc71"},
+                'bgcolor': "white",
+                'borderwidth': 2,
+                'bordercolor': "gray",
+                'steps': [
+                    {'range': [0, 2], 'color': '#ecf0f1'},
+                    {'range': [2, 5], 'color': '#d5f5e3'},
+                    {'range': [5, 8], 'color': '#abebc6'}],
+            }))
+        fig.update_layout(margin=dict(t=30, b=10, l=30, r=30), height=200, paper_bgcolor='rgba(0,0,0,0)')
         return fig
 
     def plot_performance_bars(hist):
@@ -251,15 +259,25 @@ elif page == "Vue Détaillée 🔍":
         fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=50, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         return fig
 
-    # --- MISE EN PAGE ---
+    # --- MISE EN PAGE DÉTAILLÉE ---
     st.title(f"📊 Analyse Focus : {selected_name}")
 
     col_left, col_mid, col_right = st.columns([1, 1.5, 1.5], gap="medium")
 
     with col_left:
         with st.container():
-            st.write("##### Activité (Volume)")
-            st.plotly_chart(plot_donut_volume(hist['Volume'].iloc[-1], info['vol_avg']), use_container_width=True, config={'displayModeBar': False})
+            # REMPLACEMENT DU VOLUME PAR DIVIDENDE + PER
+            st.write("##### Rendement & Valorisation")
+            
+            # 1. Jauge Dividende
+            st.plotly_chart(plot_dividend_gauge(info['dividend']), use_container_width=True, config={'displayModeBar': False})
+            
+            # 2. Indicateur PER en dessous
+            st.divider()
+            per_val = info['per']
+            per_str = f"{per_val:.1f}x" if per_val > 0 else "N/A"
+            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique. En dessous c'est 'pas cher', au dessus de 25 c'est 'cher' (ou en forte croissance).")
+
         with st.container():
             st.write("##### Derniers Jours")
             days_to_show = min(5, len(hist))
