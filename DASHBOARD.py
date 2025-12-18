@@ -6,15 +6,16 @@ import yfinance as yf
 import numpy as np
 
 # =========================================================
-# 1. CONFIGURATION ET STYLE
+# 1. CONFIGURATION ET STYLE (CSS)
 # =========================================================
 st.set_page_config(layout="wide", page_title="Market Dashboard Ultimate")
 
 st.markdown("""
     <style>
+    /* Fond gris clair */
     .stApp { background-color: #f0f2f6; }
-
-    /* Style des cartes */
+    
+    /* Design des cartes (fond blanc, bords arrondis, ombre) */
     div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
         background-color: white;
         padding: 20px;
@@ -22,31 +23,31 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 20px;
     }
-
+    
+    /* Titres des sections */
     h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
-
-    /* Astuce pour éviter que les metrics ne soient coupées */
-    [data-testid="stMetricValue"] {
-        font-size: 24px;
-    }
+    
+    /* Taille des metrics pour lisibilité */
+    [data-testid="stMetricValue"] { font-size: 24px; }
     </style>
 """, unsafe_allow_html=True)
 
+# Liste des entreprises suivies
 tickers = {
     "LVMH": "MC.PA", "TOTAL": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
-    "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA",
-    "AXA": "CS.PA", "VINCI": "DG.PA", "SAFRAN": "SAF.PA", "HERMES": "RMS.PA",
+    "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA", 
+    "AXA": "CS.PA", "VINCI": "DG.PA", "SAFRAN": "SAF.PA", "HERMES": "RMS.PA", 
     "KERING": "KER.PA", "SANOFI": "SAN.PA", "ESSILOR": "EL.PA", "ORANGE": "ORA.PA",
     "RENAULT": "RNO.PA", "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA"
 }
 
-
 # =========================================================
-# 2. FONCTIONS DATA (CACHE)
+# 2. FONCTIONS DE RÉCUPÉRATION (CACHE)
 # =========================================================
 
 @st.cache_data(ttl=3600)
 def get_global_data():
+    """Récupère les infos instantanées pour le tableau global"""
     global_data = []
     for name, sym in tickers.items():
         try:
@@ -55,47 +56,59 @@ def get_global_data():
             last = fi.last_price
             prev = fi.previous_close
             var = ((last - prev) / prev) * 100 if prev else 0
+            
             global_data.append({
-                "Entreprise": name, "Symbole": sym, "Prix": last,
-                "Variation %": var, "Market Cap": fi.market_cap, "Volume": fi.last_volume
+                "Entreprise": name,
+                "Symbole": sym,
+                "Prix": last,
+                "Variation %": var,
+                "Market Cap": fi.market_cap,
+                "Volume": fi.last_volume
             })
         except:
             continue
     return pd.DataFrame(global_data)
 
-
 @st.cache_data(ttl=3600)
-def get_multi_history(tickers_dict):
+def get_multi_history(tickers_dict, period="1y"):
+    """
+    Télécharge l'historique groupé. 
+    Prend en compte la période dynamique (1mo, 1y, 5y...)
+    """
     symbols = list(tickers_dict.values())
-    return yf.download(symbols, period="1y", progress=False)['Close']
-
+    # Téléchargement groupé optimisé
+    data = yf.download(symbols, period=period, progress=False)['Close']
+    return data
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol):
+    """Données complètes pour la vue détaillée d'une seule action"""
     try:
         stock = yf.Ticker(symbol)
         hist = stock.history(period="1y")
         fi = stock.fast_info
+        
         info = {
-            "last": fi.last_price, "prev": fi.previous_close,
-            "open": fi.open, "mcap": fi.market_cap,
+            "last": fi.last_price,
+            "prev": fi.previous_close,
+            "open": fi.open,
+            "mcap": fi.market_cap,
             "vol_avg": fi.three_month_average_volume
         }
         return hist, info
     except:
         return None, None
 
-
 @st.cache_data(ttl=3600)
 def get_index_data(symbol):
+    """Petit historique pour les indices (CAC40, BTC...)"""
     try:
         return yf.Ticker(symbol).history(period="1mo")['Close']
     except:
         return None
 
-
 # =========================================================
-# 3. NAVIGATION
+# 3. NAVIGATION (SIDEBAR)
 # =========================================================
 st.sidebar.title("📱 Navigation")
 page = st.sidebar.radio("Aller vers :", ["Vue Globale 🌍", "Vue Détaillée 🔍"])
@@ -105,71 +118,125 @@ if st.sidebar.button("🔄 Actualiser tout"):
     st.rerun()
 
 # =========================================================
-# PAGE 1 : VUE GLOBALE
+# PAGE 1 : VUE GLOBALE (RÉSUMÉ)
 # =========================================================
 if page == "Vue Globale 🌍":
-    st.title("🌍 Vue d'ensemble du CAC 40")
-
+    st.title("🌍 Vue d'ensemble du Marché")
+    
+    # --- Chargement des données de base ---
     with st.spinner("Analyse du marché en cours..."):
         df_global = get_global_data()
-        df_history_all = get_multi_history(tickers)
-
+        
+    # --- Top Metrics ---
     best_perf = df_global.loc[df_global['Variation %'].idxmax()]
     worst_perf = df_global.loc[df_global['Variation %'].idxmin()]
     total_cap = df_global['Market Cap'].sum() / 1e9
-
+    
     col1, col2, col3 = st.columns(3)
     col1.metric("Top Performance 🚀", f"{best_perf['Entreprise']}", f"{best_perf['Variation %']:.2f} %")
     col2.metric("Moins bonne Perf 📉", f"{worst_perf['Entreprise']}", f"{worst_perf['Variation %']:.2f} %")
     col3.metric("Valorisation Totale", f"{total_cap:.2f} Mds €")
-
+    
     st.divider()
 
+    # --- Comparateur Graphique (AVEC SÉLECTEUR DE PÉRIODE) ---
     st.subheader("📈 Comparateur de Performance (Base 100)")
-    selected_tickers = st.multiselect("Comparer :", list(tickers.keys()), default=["LVMH", "TOTAL", "AIRBUS"])
+    
+    # Zone de configuration
+    col_conf1, col_conf2 = st.columns([1, 2])
+    
+    with col_conf1:
+        # 1. Boutons pour choisir la durée
+        time_period = st.radio(
+            "Période :", 
+            ["1 Mois", "3 Mois", "6 Mois", "1 An", "5 Ans"],
+            index=3, # Par défaut sur "1 An"
+            horizontal=True
+        )
+        # Mapping pour Yahoo Finance
+        period_map = {"1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", "1 An": "1y", "5 Ans": "5y"}
+        selected_yahoo_period = period_map[time_period]
 
+    with col_conf2:
+        # 2. Sélecteur d'entreprises
+        selected_tickers = st.multiselect(
+            "Comparer :", list(tickers.keys()), default=["LVMH", "TOTAL", "AIRBUS"]
+        )
+    
+    # Chargement dynamique selon la période choisie
+    df_history_dynamic = get_multi_history(tickers, period=selected_yahoo_period)
+    
     if selected_tickers:
         fig_comp = go.Figure()
         for name in selected_tickers:
             sym = tickers[name]
-            if sym in df_history_all.columns:
-                series = df_history_all[sym].dropna()
+            if sym in df_history_dynamic.columns:
+                series = df_history_dynamic[sym].dropna()
                 if not series.empty:
+                    # Normalisation (Base 0%)
                     first_price = series.iloc[0]
                     normalized_series = ((series - first_price) / first_price) * 100
-                    fig_comp.add_trace(go.Scatter(x=series.index, y=normalized_series, mode='lines', name=name))
-        fig_comp.update_layout(hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=400,
-                               yaxis_title="Variation (%)", paper_bgcolor='rgba(0,0,0,0)',
-                               plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(showgrid=False),
-                               yaxis=dict(showgrid=True, gridcolor='#eee'))
+                    
+                    fig_comp.add_trace(go.Scatter(
+                        x=series.index, 
+                        y=normalized_series, 
+                        mode='lines', 
+                        name=name,
+                        hovertemplate='%{y:.2f}%' # Affiche le % au survol
+                    ))
+        
+        fig_comp.update_layout(
+            hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
+            yaxis_title="Performance (%)", paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(showgrid=False), 
+            yaxis=dict(showgrid=True, gridcolor='#eee'),
+            legend=dict(orientation="h", y=1.02, xanchor="right", x=1)
+        )
         st.plotly_chart(fig_comp, use_container_width=True)
-
+    else:
+        st.info("Sélectionnez au moins une entreprise pour voir le graphique.")
+    
     st.divider()
-
+    
+    # --- Tableau et Treemap ---
     c1, c2 = st.columns([1.5, 1])
+    
     with c1:
         st.subheader("📊 Tableau des Prix")
-        st.dataframe(df_global.style.format({"Prix": "{:.2f} €", "Variation %": "{:+.2f} %", "Market Cap": "{:,.0f}"})
-                     .background_gradient(subset=["Variation %"], cmap="RdYlGn", vmin=-3, vmax=3),
-                     use_container_width=True, height=600,
-                     column_config={"Volume": st.column_config.ProgressColumn("Volume", format="%d", min_value=0,
-                                                                              max_value=int(df_global['Volume'].max())),
-                                    "Market Cap": st.column_config.NumberColumn("Market Cap", format="%.2e €")})
+        st.dataframe(
+            df_global.style.format({
+                "Prix": "{:.2f} €",
+                "Variation %": "{:+.2f} %",
+                "Market Cap": "{:,.0f}",
+            }).background_gradient(subset=["Variation %"], cmap="RdYlGn", vmin=-3, vmax=3),
+            use_container_width=True,
+            height=600,
+            column_config={
+                "Volume": st.column_config.ProgressColumn("Volume", format="%d", min_value=0, max_value=int(df_global['Volume'].max())),
+                "Market Cap": st.column_config.NumberColumn("Market Cap", format="%.2e €")
+            }
+        )
+
     with c2:
         st.subheader("🗺️ Carte (Market Cap)")
-        fig_tree = px.treemap(df_global, path=['Entreprise'], values='Market Cap', color='Variation %',
-                              color_continuous_scale=['#e74c3c', '#ecf0f1', '#2ecc71'], color_continuous_midpoint=0,
-                              custom_data=['Prix', 'Variation %'])
-        fig_tree.update_traces(textposition="middle center", texttemplate="%{label}<br>%{customdata[1]:.2f}%",
-                               hovertemplate='<b>%{label}</b><br>Prix: %{customdata[0]:.2f}€<br>Var: %{customdata[1]:.2f}%')
+        fig_tree = px.treemap(
+            df_global, 
+            path=['Entreprise'], values='Market Cap', color='Variation %',
+            color_continuous_scale=['#e74c3c', '#ecf0f1', '#2ecc71'], color_continuous_midpoint=0,
+            custom_data=['Prix', 'Variation %']
+        )
+        fig_tree.update_traces(
+            textposition="middle center", texttemplate="%{label}<br>%{customdata[1]:.2f}%",
+            hovertemplate='<b>%{label}</b><br>Prix: %{customdata[0]:.2f}€<br>Var: %{customdata[1]:.2f}%'
+        )
         fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600)
         st.plotly_chart(fig_tree, use_container_width=True)
 
 # =========================================================
-# PAGE 2 : VUE DÉTAILLÉE (CORRIGÉE POUR MARKET CAP)
+# PAGE 2 : VUE DÉTAILLÉE (DASHBOARD FOCUS)
 # =========================================================
 elif page == "Vue Détaillée 🔍":
-
+    
     st.sidebar.markdown("---")
     st.sidebar.subheader("Sélection Focus")
     selected_name = st.sidebar.selectbox("Choisir une entreprise :", list(tickers.keys()))
@@ -185,67 +252,52 @@ elif page == "Vue Détaillée 🔍":
         st.error("Erreur technique ou données indisponibles.")
         st.stop()
 
-
-    # --- Fonctions Graphiques ---
+    # --- Fonctions Graphiques Locales ---
     def plot_donut_volume(vol_today, vol_avg):
         values = [vol_today, max(0, vol_avg - vol_today)]
         colors = ['#2ecc71', '#ecf0f1']
-        fig = go.Figure(
-            data=[go.Pie(labels=['Vol Day', 'Rest'], values=values, hole=.6, marker=dict(colors=colors), sort=False)])
+        fig = go.Figure(data=[go.Pie(labels=['Vol Day', 'Rest'], values=values, hole=.6, marker=dict(colors=colors), sort=False)])
         fig.update_layout(margin=dict(t=30, b=0, l=0, r=0), height=250, showlegend=False)
-        vol_str = f"{vol_today / 1e6:.1f}M" if vol_today > 1e6 else f"{vol_today / 1e3:.0f}K"
+        vol_str = f"{vol_today/1e6:.1f}M" if vol_today > 1e6 else f"{vol_today/1e3:.0f}K"
         fig.add_annotation(text=f"<b>Volume</b><br>{vol_str}", x=0.5, y=0.5, font_size=16, showarrow=False)
         return fig
 
-
     def plot_performance_bars(hist):
         last = hist['Close'].iloc[-1]
-
         def get_var(days):
             if len(hist) > days: return ((last - hist['Close'].iloc[-days]) / hist['Close'].iloc[-days]) * 100
             return 0
-
-        perfs = [{'Label': '1 Sem', 'V': get_var(5)}, {'Label': '1 Mois', 'V': get_var(20)},
+        perfs = [{'Label': '1 Sem', 'V': get_var(5)}, {'Label': '1 Mois', 'V': get_var(20)}, 
                  {'Label': '6 Mois', 'V': get_var(120)}, {'Label': '1 An', 'V': get_var(250)}]
         colors = ['#2ecc71' if p['V'] >= 0 else '#e74c3c' for p in perfs]
-        fig = go.Figure(
-            go.Bar(x=[p['V'] for p in perfs], y=[p['Label'] for p in perfs], orientation='h', marker_color=colors,
-                   text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto'))
-        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250, xaxis=dict(showgrid=False),
-                          yaxis=dict(showgrid=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        fig = go.Figure(go.Bar(x=[p['V'] for p in perfs], y=[p['Label'] for p in perfs], orientation='h', marker_color=colors, text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto'))
+        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250, xaxis=dict(showgrid=False), yaxis=dict(showgrid=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         return fig
-
 
     def plot_candlestick_real(df):
         df['MA20'] = df['Close'].rolling(window=20).mean()
         fig = go.Figure()
-        fig.add_trace(
-            go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='OHLC'))
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='OHLC'))
         fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1), name='Moy 20j'))
-        fig.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=300, xaxis_rangeslider_visible=False,
-                          paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+        fig.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=300, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
         return fig
-
-
+    
     def plot_sparkline_real(series, color):
         if series is None: return go.Figure()
         fig = go.Figure(go.Scatter(y=series.values, mode='lines', line=dict(color=color, width=2)))
-        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=50, xaxis=dict(visible=False),
-                          yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=50, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         return fig
 
-
-    # --- DASHBOARD LAYOUT ---
+    # --- MISE EN PAGE DÉTAILLÉE ---
     st.title(f"📊 Analyse Focus : {selected_name}")
 
     col_left, col_mid, col_right = st.columns([1, 1.5, 1.5], gap="medium")
 
-    # --- Colonne Gauche ---
+    # Colonne Gauche
     with col_left:
         with st.container():
             st.write("##### Activité (Volume)")
-            st.plotly_chart(plot_donut_volume(hist['Volume'].iloc[-1], info['vol_avg']), use_container_width=True,
-                            config={'displayModeBar': False})
+            st.plotly_chart(plot_donut_volume(hist['Volume'].iloc[-1], info['vol_avg']), use_container_width=True, config={'displayModeBar': False})
         with st.container():
             st.write("##### Derniers Jours")
             last_days = hist.tail(5).iloc[::-1].copy()
@@ -255,34 +307,29 @@ elif page == "Vue Détaillée 🔍":
             df_show['Variation'] = df_show['Variation'].map('{:+.2f} %'.format)
             st.table(df_show)
 
-    # --- Colonne Milieu (MODIFIÉE POUR MARKET CAP) ---
+    # Colonne Milieu (Optimisée pour l'espace)
     with col_mid:
         with st.container():
-            # 1. On met les Indicateurs Clés SUR UNE LIGNE SÉPARÉE pour avoir de la place
             st.write("##### Indicateurs Clés")
+            # KPIs sur une ligne séparée
             kpi1, kpi2, kpi3 = st.columns(3)
-
             var_day = ((info['last'] - info['prev']) / info['prev']) * 100
             kpi1.metric("Prix", f"{info['last']:.2f}€")
             kpi2.metric("Var Jour", f"{var_day:+.2f}%", delta=f"{var_day:+.2f}%")
-            kpi3.metric("Market Cap", f"{info['mcap'] / 1e9:.1f} B€")  # Plus de coupure ici !
-
+            kpi3.metric("Market Cap", f"{info['mcap']/1e9:.1f} B€")
+            
             st.divider()
-
-            # 2. Le graphique de performance prend toute la largeur maintenant
+            
             st.write("##### Performances Historiques")
             st.plotly_chart(plot_performance_bars(hist), use_container_width=True, config={'displayModeBar': False})
 
         with st.container():
             st.write(f"##### Courbe : {selected_name}")
-            fig_line = go.Figure(go.Scatter(x=hist.index, y=hist['Close'], fill='tozeroy', line=dict(color='#3498db'),
-                                            fillcolor='rgba(52, 152, 219, 0.1)'))
-            fig_line.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=200, paper_bgcolor='rgba(0,0,0,0)',
-                                   plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(showgrid=False),
-                                   yaxis=dict(showgrid=True, gridcolor='#eee'))
+            fig_line = go.Figure(go.Scatter(x=hist.index, y=hist['Close'], fill='tozeroy', line=dict(color='#3498db'), fillcolor='rgba(52, 152, 219, 0.1)'))
+            fig_line.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=200, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee'))
             st.plotly_chart(fig_line, use_container_width=True, config={'displayModeBar': False})
 
-    # --- Colonne Droite ---
+    # Colonne Droite
     with col_right:
         with st.container():
             st.write("##### Analyse Technique")
@@ -294,7 +341,5 @@ elif page == "Vue Détaillée 🔍":
                 c_spark[0].write(f"**{name}**")
                 if data_idx is not None:
                     col = '#2ecc71' if data_idx.iloc[-1] > data_idx.iloc[0] else '#e74c3c'
-                    c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True,
-                                            config={'displayModeBar': False})
-
+                    c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True, config={'displayModeBar': False})
                 st.divider()
