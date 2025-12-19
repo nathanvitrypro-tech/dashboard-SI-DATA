@@ -24,6 +24,9 @@ st.markdown("""
     
     h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
     [data-testid="stMetricValue"] { font-size: 24px; }
+    
+    /* Style pour la note de bas de page */
+    .caption-text { font-size: 0.8em; color: #888; font-style: italic; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -69,10 +72,7 @@ def get_detail_data(symbol, period="1y"):
         stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
         inf = stock.info
-        
-        # --- AJOUT: DONNÉES FINANCIÈRES (BILANS) ---
         financials = stock.financials
-        # -------------------------------------------
 
         data_points = {
             "dividend": inf.get('dividendYield', 0),
@@ -200,7 +200,6 @@ elif page == "Vue Détaillée 🔍":
     selected_yahoo_period_detail = period_map_detail[time_period_detail]
 
     with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
-        # Modification de l'unpacking ici (3 valeurs retournées maintenant)
         hist, info, financials = get_detail_data(symbol, period=selected_yahoo_period_detail)
         cac40_hist_period = get_historical_data("^FCHI", period=selected_yahoo_period_detail)
 
@@ -301,22 +300,14 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
-    # --- NOUVEAU : GRAPHIQUE FINANCIER (REVENUS/PROFITS) ---
     def plot_financial_growth(financials):
-        if financials is None or financials.empty:
-            return go.Figure()
-        
+        if financials is None or financials.empty: return go.Figure()
         try:
-            fin_T = financials.T
-            fin_T = fin_T.sort_index().tail(4) # Dernières 4 années
+            fin_T = financials.T.sort_index().tail(4)
             dates = fin_T.index.strftime('%Y')
-            
-            # Recherche flexible des clés
             rev_key = next((k for k in ['Total Revenue', 'TotalRevenue', 'Revenue'] if k in financials.index), None)
             inc_key = next((k for k in ['Net Income', 'NetIncome', 'Net Income Common Stockholders'] if k in financials.index), None)
-            
             if not rev_key or not inc_key: return go.Figure()
-
             revenue = fin_T[rev_key]
             income = fin_T[inc_key]
         except: return go.Figure()
@@ -392,8 +383,9 @@ elif page == "Vue Détaillée 🔍":
             
             st.divider()
             
-            # --- REMPLACEMENT ICI : GRAPHIQUE FINANCIER ---
             st.caption(f"🏢 Secteur : **{info.get('sector', 'N/A')}**")
-            # Appel de la nouvelle fonction financière
             st.plotly_chart(plot_financial_growth(financials), use_container_width=True, config={'displayModeBar': False})
-            # ----------------------------------------------
+            
+            # --- AJOUT DE LA NOTE ---
+            st.caption("*Note : 'G' (Giga) = Milliards*") 
+            # ------------------------
