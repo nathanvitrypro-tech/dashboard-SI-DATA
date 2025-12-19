@@ -70,17 +70,15 @@ def get_detail_data(symbol, period="1y"):
         hist = stock.history(period=period)
         inf = stock.info
         
-        # --- NOUVELLES DONNÉES FONDAMENTALES ---
+        # Données fondamentales
         data_points = {
             "dividend": inf.get('dividendYield', 0),
             "per": inf.get('trailingPE', 0),
-            # Objectif de cours des analystes
             "targetMeanPrice": inf.get('targetMeanPrice', 0),
             "recommendationKey": inf.get('recommendationKey', 'N/A'),
-            # Fondamentaux
-            "profitMargins": inf.get('profitMargins', 0), # Marge Nette
-            "beta": inf.get('beta', 0), # Volatilité
-            "debtToEquity": inf.get('debtToEquity', 0) # Dette
+            "profitMargins": inf.get('profitMargins', 0), 
+            "beta": inf.get('beta', 0), 
+            "debtToEquity": inf.get('debtToEquity', 0)
         }
 
         fi = stock.fast_info
@@ -89,7 +87,7 @@ def get_detail_data(symbol, period="1y"):
             "last": fi.last_price, 
             "prev": fi.previous_close,
             "mcap": fi.market_cap,
-            **data_points # On fusionne tout
+            **data_points
         }
         return hist, info_dict
     except Exception as e:
@@ -279,28 +277,34 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
     
-    # --- NOUVEAU : GRAPHIQUE ANALYSTES ---
-    def plot_analyst_target(current_price, target_price):
-        if not target_price or target_price == 0:
+    # --- NOUVEAU GRAPHIQUE : COMPARATEUR PRIX VS OBJECTIF ---
+    def plot_price_vs_target_bar(current, target):
+        if not target or target == 0:
             return go.Figure()
+            
+        upside = ((target - current) / current) * 100
+        color_target = "#2ecc71" if target > current else "#e74c3c"
         
-        upside = ((target_price - current_price) / current_price) * 100
-        color_upside = "#2ecc71" if upside > 0 else "#e74c3c"
+        # Données pour le graphique
+        x_vals = ["Prix Actuel", "Objectif Analystes"]
+        y_vals = [current, target]
+        colors = ["#3498db", color_target]
         
-        fig = go.Figure()
-        # Jauge simple
-        fig.add_trace(go.Indicator(
-            mode = "number+gauge+delta", value = current_price,
-            delta = {'reference': target_price, 'position': "top", 'relative': False, 'valueformat': '.2f€'},
-            title = {'text': f"Objectif : {target_price:.2f}€<br><span style='font-size:0.6em;color:{color_upside}'>Potentiel: {upside:+.2f}%</span>"},
-            number = {'suffix': "€", 'font': {'size': 30}},
-            gauge = {
-                'shape': "bullet", 'axis': {'range': [None, max(current_price, target_price)*1.2]},
-                'threshold': {'line': {'color': "black", 'width': 3}, 'thickness': 0.75, 'value': target_price},
-                'bar': {'color': "#3498db"}
-            }
+        fig = go.Figure(go.Bar(
+            x=y_vals, y=x_vals, orientation='h',
+            marker_color=colors, text=[f"{current:.2f}€", f"{target:.2f}€"],
+            textposition='auto'
         ))
-        fig.update_layout(margin=dict(t=40, b=10, l=20, r=20), height=180, paper_bgcolor='rgba(0,0,0,0)')
+        
+        # Ajout du % de potentiel
+        fig.update_layout(
+            title=dict(text=f"Potentiel: {upside:+.2f}%", font=dict(color=color_target, size=18)),
+            margin=dict(t=40, b=0, l=0, r=0), height=150,
+            xaxis=dict(showgrid=False, visible=False), 
+            yaxis=dict(showgrid=False),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            showlegend=False
+        )
         return fig
 
     # --- MISE EN PAGE DÉTAILLÉE ---
@@ -318,13 +322,14 @@ elif page == "Vue Détaillée 🔍":
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
 
         with st.container():
-            # REMPLACEMENT ICI : PLUS DE TABLEAU, MAIS LES ANALYSTES
+            # --- MODIFICATION ICI : GRAPHIQUE A BARRRES ---
             st.write("##### 🎯 Objectif Analystes")
             if info['targetMeanPrice'] and info['targetMeanPrice'] > 0:
-                st.plotly_chart(plot_analyst_target(info['last'], info['targetMeanPrice']), use_container_width=True, config={'displayModeBar': False})
-                st.info(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
+                st.plotly_chart(plot_price_vs_target_bar(info['last'], info['targetMeanPrice']), use_container_width=True, config={'displayModeBar': False})
+                st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
             else:
                 st.warning("Pas d'objectif de cours disponible.")
+            # ---------------------------------------------
 
     with col_mid:
         with st.container():
@@ -351,22 +356,20 @@ elif page == "Vue Détaillée 🔍":
             st.plotly_chart(plot_candlestick_real(hist), use_container_width=True, config={'displayModeBar': False})
         
         with st.container():
-            # REMPLACEMENT ICI : PLUS DE SPARKLINES, MAIS LES FONDAMENTAUX
             st.write("##### 💎 Fondamentaux & Risque")
-            
             f1, f2, f3 = st.columns(3)
             
             # Marge Nette
             margin = info.get('profitMargins', 0)
-            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette de l'entreprise")
+            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
             
-            # Beta (Risque)
+            # Beta
             beta = info.get('beta', 0)
-            f2.metric("Bêta (Risque)", f"{beta:.2f}" if beta else "N/A", help="Volatilité par rapport au marché (1 = moyenne)")
+            f2.metric("Bêta (Risque)", f"{beta:.2f}" if beta else "N/A", help="1 = Risque Marché.")
             
             # Dette
             debt = info.get('debtToEquity', 0)
-            f3.metric("Dette/Capitaux", f"{debt:.1f}%" if debt else "N/A", help="Niveau d'endettement")
+            f3.metric("Dette/Capitaux", f"{debt:.1f}%" if debt else "N/A")
             
             st.divider()
             st.caption("Données fondamentales fournies par Yahoo Finance.")
