@@ -85,7 +85,6 @@ def get_detail_data(symbol, period="1y"):
     except Exception as e:
         return None, None
 
-# --- NOUVELLE FONCTION POUR LE BENCHMARK ---
 @st.cache_data(ttl=3600)
 def get_historical_data(symbol, period="1y"):
     """Récupère l'historique de prix d'un seul symbole (ex: CAC 40)"""
@@ -93,11 +92,9 @@ def get_historical_data(symbol, period="1y"):
         return yf.Ticker(symbol).history(period=period)['Close']
     except:
         return None
-# -------------------------------------------
 
 @st.cache_data(ttl=3600)
 def get_index_data(symbol):
-    # Gardé pour les sparklines du bas (1 mois fixe)
     try: return yf.Ticker(symbol).history(period="1mo")['Close']
     except: return None
 
@@ -200,12 +197,7 @@ elif page == "Vue Détaillée 🔍":
 
     with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
         hist, info = get_detail_data(symbol, period=selected_yahoo_period_detail)
-        
-        # --- NOUVEAU : On charge le CAC 40 pour la MÊME période ---
         cac40_hist_period = get_historical_data("^FCHI", period=selected_yahoo_period_detail)
-        # ----------------------------------------------------------
-
-        # Données pour les sparklines (1 mois fixe)
         cac40 = get_index_data("^FCHI")
         sp500 = get_index_data("^GSPC")
         bitcoin = get_index_data("BTC-EUR")
@@ -214,7 +206,6 @@ elif page == "Vue Détaillée 🔍":
         st.error("Données indisponibles.")
         st.stop()
 
-    # --- FONCTIONS GRAPHIQUES ---
     def plot_dividend_gauge(yield_val):
         if yield_val is None: val = 0
         else: val = yield_val * 100 if yield_val < 0.5 else yield_val
@@ -236,23 +227,29 @@ elif page == "Vue Détaillée 🔍":
         perfs = [{'Label': '1 Sem', 'V': get_var(5)}, {'Label': '1 Mois', 'V': get_var(20)}, 
                  {'Label': '3 Mois', 'V': get_var(60)}, {'Label': '6 Mois', 'V': get_var(120)}]
         colors = ['#2ecc71' if p['V'] >= 0 else '#e74c3c' for p in perfs]
-        fig = go.Figure(go.Bar(x=[p['V'] for p in perfs], y=[p['Label'] for p in perfs], orientation='h', marker_color=colors, text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto', name="Performance (%)"))
-        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250, xaxis=dict(showgrid=False), yaxis=dict(showgrid=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0), showlegend=True', legend=dict(orientation="h", y=-0.1))
+        
+        fig = go.Figure(go.Bar(
+            x=[p['V'] for p in perfs], y=[p['Label'] for p in perfs], 
+            orientation='h', marker_color=colors, 
+            text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto', 
+            name="Performance (%)"
+        ))
+        # CORRECTION ICI : Fermeture des guillemets correctement
+        fig.update_layout(
+            margin=dict(t=0, b=0, l=0, r=0), height=250, 
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=False), 
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+            showlegend=True, legend=dict(orientation="h", y=-0.1)
+        )
         return fig
 
-    # --- NOUVEAU GRAPHIQUE : PRIX VS BENCHMARK (BASE 100) ---
     def plot_price_vs_benchmark(stock_series, benchmark_series, stock_name, benchmark_name="CAC 40"):
-        # Alignement des dates (intersection)
         df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
         df.columns = ['Stock', 'Benchmark']
-        
-        # Normalisation Base 100
         df = (df / df.iloc[0]) * 100
         
         fig = go.Figure()
-        # Ligne de l'action
         fig.add_trace(go.Scatter(x=df.index, y=df['Stock'], mode='lines', name=stock_name, line=dict(color='#3498db', width=2)))
-        # Ligne du benchmark (en gris, pointillé pour le contexte)
         fig.add_trace(go.Scatter(x=df.index, y=df['Benchmark'], mode='lines', name=benchmark_name, line=dict(color='#95a5a6', width=2, dash='dot')))
         
         fig.update_layout(
@@ -263,21 +260,33 @@ elif page == "Vue Détaillée 🔍":
             showlegend=True, legend=dict(orientation="h", y=1.1)
         )
         return fig
-    # --------------------------------------------------------
 
     def plot_candlestick_real(df):
         window = 50 if len(df) > 200 else (20 if len(df) > 50 else 5)
         df['MA'] = df['Close'].rolling(window=window).mean()
         fig = go.Figure()
+        
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Prix (OHLC)'))
         fig.add_trace(go.Scatter(x=df.index, y=df['MA'], line=dict(color='orange', width=1), name=f'Moyenne {window}j'))
-        fig.update_layout(margin=dict(t=10, b=20, l=0, r=0), height=300, xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=True, legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center"))
+        
+        fig.update_layout(
+            margin=dict(t=10, b=20, l=0, r=0), height=300, 
+            xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(0,0,0,0)', showlegend=True, 
+            legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
+        )
         return fig
     
     def plot_sparkline_real(series, color):
         if series is None: return go.Figure()
         fig = go.Figure(go.Scatter(y=series.values, mode='lines', line=dict(color=color, width=2), name="Cours"))
-        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=50, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0), showlegend=False')
+        # CORRECTION ICI AUSSI
+        fig.update_layout(
+            margin=dict(t=0, b=0, l=0, r=0), height=50, 
+            xaxis=dict(visible=False), yaxis=dict(visible=False), 
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+            showlegend=False
+        )
         return fig
 
     # --- MISE EN PAGE DÉTAILLÉE ---
@@ -317,13 +326,11 @@ elif page == "Vue Détaillée 🔍":
             st.plotly_chart(plot_performance_bars(hist), use_container_width=True, config={'displayModeBar': False})
 
         with st.container():
-            # --- REMPLACEMENT DU GRAPHIQUE ICI ---
             if cac40_hist_period is not None and not cac40_hist_period.empty:
                 fig_vs_bench = plot_price_vs_benchmark(hist['Close'], cac40_hist_period, selected_name)
                 st.plotly_chart(fig_vs_bench, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.warning("Données du benchmark (CAC 40) indisponibles pour la comparaison.")
-            # -------------------------------------
+                st.warning("Données du benchmark indisponibles.")
 
     with col_right:
         with st.container():
