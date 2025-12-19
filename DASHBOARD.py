@@ -24,6 +24,9 @@ st.markdown("""
     
     h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
     [data-testid="stMetricValue"] { font-size: 24px; }
+    
+    /* Petits ajustements pour la jauge 52s */
+    .caption-text { font-size: 0.8em; color: #888; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -78,7 +81,12 @@ def get_detail_data(symbol, period="1y"):
             "recommendationKey": inf.get('recommendationKey', 'N/A'),
             "profitMargins": inf.get('profitMargins', 0), 
             "beta": inf.get('beta', 0), 
-            "debtToEquity": inf.get('debtToEquity', 0)
+            "debtToEquity": inf.get('debtToEquity', 0),
+            # --- AJOUTS ---
+            "yearLow": inf.get('fiftyTwoWeekLow', 0),
+            "yearHigh": inf.get('fiftyTwoWeekHigh', 0),
+            "sector": inf.get('sector', 'N/A'),
+            "industry": inf.get('industry', 'N/A')
         }
 
         fi = stock.fast_info
@@ -203,7 +211,7 @@ elif page == "Vue Détaillée 🔍":
         st.error("Données indisponibles.")
         st.stop()
 
-    # --- JAUGE DIVIDENDE ---
+    # --- FONCTIONS GRAPHIQUES ---
     def plot_dividend_gauge(yield_val):
         if yield_val is None: val = 0
         else: val = yield_val * 100 if yield_val < 0.5 else yield_val
@@ -217,7 +225,6 @@ elif page == "Vue Détaillée 🔍":
         fig.update_layout(margin=dict(t=30, b=10, l=30, r=30), height=200, paper_bgcolor='rgba(0,0,0,0)')
         return fig
 
-    # --- BARRES PERF ---
     def plot_performance_bars(hist):
         last = hist['Close'].iloc[-1]
         def get_var(days):
@@ -241,7 +248,6 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
-    # --- COURBE VS BENCHMARK ---
     def plot_price_vs_benchmark(stock_series, benchmark_series, stock_name, benchmark_name="CAC 40"):
         df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
         df.columns = ['Stock', 'Benchmark']
@@ -260,7 +266,6 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
-    # --- BOUGIES ---
     def plot_candlestick_real(df):
         window = 50 if len(df) > 200 else (20 if len(df) > 50 else 5)
         df['MA'] = df['Close'].rolling(window=window).mean()
@@ -277,15 +282,12 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
     
-    # --- NOUVEAU GRAPHIQUE : COMPARATEUR PRIX VS OBJECTIF ---
+    # --- GRAPHIQUE BARRES COMPARATIVES (PRIX VS OBJECTIF) ---
     def plot_price_vs_target_bar(current, target):
-        if not target or target == 0:
-            return go.Figure()
-            
+        if not target or target == 0: return go.Figure()
         upside = ((target - current) / current) * 100
         color_target = "#2ecc71" if target > current else "#e74c3c"
         
-        # Données pour le graphique
         x_vals = ["Prix Actuel", "Objectif Analystes"]
         y_vals = [current, target]
         colors = ["#3498db", color_target]
@@ -295,15 +297,37 @@ elif page == "Vue Détaillée 🔍":
             marker_color=colors, text=[f"{current:.2f}€", f"{target:.2f}€"],
             textposition='auto'
         ))
-        
-        # Ajout du % de potentiel
         fig.update_layout(
             title=dict(text=f"Potentiel: {upside:+.2f}%", font=dict(color=color_target, size=18)),
             margin=dict(t=40, b=0, l=0, r=0), height=150,
-            xaxis=dict(showgrid=False, visible=False), 
-            yaxis=dict(showgrid=False),
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            showlegend=False
+            xaxis=dict(showgrid=False, visible=False), yaxis=dict(showgrid=False),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False
+        )
+        return fig
+
+    # --- NOUVEAU : JAUGE 52 SEMAINES ---
+    def plot_52week_range(current, low, high):
+        if not low or not high: return go.Figure()
+        
+        fig = go.Figure()
+        # Fond (Range total)
+        fig.add_shape(type="rect", x0=low, y0=0, x1=high, y1=1,
+                      fillcolor="#f0f2f6", line=dict(color="rgba(0,0,0,0)"), layer="below")
+        # Progression (Prix actuel)
+        fig.add_shape(type="rect", x0=low, y0=0, x1=current, y1=1,
+                      fillcolor="#3498db", line=dict(color="rgba(0,0,0,0)"), layer="below")
+        # Curseur
+        fig.add_trace(go.Scatter(x=[current], y=[1.3], mode='text', text=["▼"], 
+                                 textfont=dict(size=20, color="#2c3e50"), showlegend=False, hoverinfo='skip'))
+
+        fig.update_layout(
+            title=dict(text="Position Annuelle (Min/Max)", font=dict(size=14, color="#555")),
+            xaxis=dict(range=[low*0.95, high*1.05], showgrid=False, visible=True, 
+                       tickmode='array', tickvals=[low, high], ticktext=[f"{low:.1f}€<br>Min", f"{high:.1f}€<br>Max"],
+                       tickfont=dict(size=12, color="#7f8c8d")),
+            yaxis=dict(showgrid=False, visible=False, range=[0, 2]),
+            margin=dict(t=30, b=20, l=10, r=10), height=120,
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
         )
         return fig
 
@@ -322,14 +346,12 @@ elif page == "Vue Détaillée 🔍":
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
 
         with st.container():
-            # --- MODIFICATION ICI : GRAPHIQUE A BARRRES ---
             st.write("##### 🎯 Objectif Analystes")
             if info['targetMeanPrice'] and info['targetMeanPrice'] > 0:
                 st.plotly_chart(plot_price_vs_target_bar(info['last'], info['targetMeanPrice']), use_container_width=True, config={'displayModeBar': False})
                 st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
             else:
                 st.warning("Pas d'objectif de cours disponible.")
-            # ---------------------------------------------
 
     with col_mid:
         with st.container():
@@ -356,20 +378,22 @@ elif page == "Vue Détaillée 🔍":
             st.plotly_chart(plot_candlestick_real(hist), use_container_width=True, config={'displayModeBar': False})
         
         with st.container():
-            st.write("##### 💎 Fondamentaux & Risque")
+            st.write("##### 💎 Fondamentaux & Contexte")
             f1, f2, f3 = st.columns(3)
             
-            # Marge Nette
+            # Indicateurs simples
             margin = info.get('profitMargins', 0)
             f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
             
-            # Beta
             beta = info.get('beta', 0)
-            f2.metric("Bêta (Risque)", f"{beta:.2f}" if beta else "N/A", help="1 = Risque Marché.")
+            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité (1 = moyenne).")
             
-            # Dette
             debt = info.get('debtToEquity', 0)
-            f3.metric("Dette/Capitaux", f"{debt:.1f}%" if debt else "N/A")
+            f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
             
             st.divider()
-            st.caption("Données fondamentales fournies par Yahoo Finance.")
+            
+            # --- AJOUT JAUGE 52 SEMAINES ICI ---
+            st.caption(f"🏢 Secteur : **{info.get('sector', 'N/A')}**")
+            if info['yearLow'] and info['yearHigh']:
+                st.plotly_chart(plot_52week_range(info['last'], info['yearLow'], info['yearHigh']), use_container_width=True, config={'displayModeBar': False})
