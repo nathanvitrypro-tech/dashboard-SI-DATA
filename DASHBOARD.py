@@ -24,9 +24,6 @@ st.markdown("""
     
     h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
     [data-testid="stMetricValue"] { font-size: 24px; }
-    
-    /* Petits ajustements pour la jauge 52s */
-    .caption-text { font-size: 0.8em; color: #888; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -73,7 +70,10 @@ def get_detail_data(symbol, period="1y"):
         hist = stock.history(period=period)
         inf = stock.info
         
-        # Données fondamentales
+        # --- AJOUT: DONNÉES FINANCIÈRES (BILANS) ---
+        financials = stock.financials
+        # -------------------------------------------
+
         data_points = {
             "dividend": inf.get('dividendYield', 0),
             "per": inf.get('trailingPE', 0),
@@ -82,11 +82,7 @@ def get_detail_data(symbol, period="1y"):
             "profitMargins": inf.get('profitMargins', 0), 
             "beta": inf.get('beta', 0), 
             "debtToEquity": inf.get('debtToEquity', 0),
-            # --- AJOUTS ---
-            "yearLow": inf.get('fiftyTwoWeekLow', 0),
-            "yearHigh": inf.get('fiftyTwoWeekHigh', 0),
-            "sector": inf.get('sector', 'N/A'),
-            "industry": inf.get('industry', 'N/A')
+            "sector": inf.get('sector', 'N/A')
         }
 
         fi = stock.fast_info
@@ -97,9 +93,9 @@ def get_detail_data(symbol, period="1y"):
             "mcap": fi.market_cap,
             **data_points
         }
-        return hist, info_dict
+        return hist, info_dict, financials
     except Exception as e:
-        return None, None
+        return None, None, None
 
 @st.cache_data(ttl=3600)
 def get_historical_data(symbol, period="1y"):
@@ -204,7 +200,8 @@ elif page == "Vue Détaillée 🔍":
     selected_yahoo_period_detail = period_map_detail[time_period_detail]
 
     with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
-        hist, info = get_detail_data(symbol, period=selected_yahoo_period_detail)
+        # Modification de l'unpacking ici (3 valeurs retournées maintenant)
+        hist, info, financials = get_detail_data(symbol, period=selected_yahoo_period_detail)
         cac40_hist_period = get_historical_data("^FCHI", period=selected_yahoo_period_detail)
 
     if hist is None or hist.empty:
@@ -282,7 +279,6 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
     
-    # --- GRAPHIQUE BARRES COMPARATIVES (PRIX VS OBJECTIF) ---
     def plot_price_vs_target_bar(current, target):
         if not target or target == 0: return go.Figure()
         upside = ((target - current) / current) * 100
@@ -305,29 +301,36 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
-    # --- NOUVEAU : JAUGE 52 SEMAINES ---
-    def plot_52week_range(current, low, high):
-        if not low or not high: return go.Figure()
+    # --- NOUVEAU : GRAPHIQUE FINANCIER (REVENUS/PROFITS) ---
+    def plot_financial_growth(financials):
+        if financials is None or financials.empty:
+            return go.Figure()
         
+        try:
+            fin_T = financials.T
+            fin_T = fin_T.sort_index().tail(4) # Dernières 4 années
+            dates = fin_T.index.strftime('%Y')
+            
+            # Recherche flexible des clés
+            rev_key = next((k for k in ['Total Revenue', 'TotalRevenue', 'Revenue'] if k in financials.index), None)
+            inc_key = next((k for k in ['Net Income', 'NetIncome', 'Net Income Common Stockholders'] if k in financials.index), None)
+            
+            if not rev_key or not inc_key: return go.Figure()
+
+            revenue = fin_T[rev_key]
+            income = fin_T[inc_key]
+        except: return go.Figure()
+
         fig = go.Figure()
-        # Fond (Range total)
-        fig.add_shape(type="rect", x0=low, y0=0, x1=high, y1=1,
-                      fillcolor="#f0f2f6", line=dict(color="rgba(0,0,0,0)"), layer="below")
-        # Progression (Prix actuel)
-        fig.add_shape(type="rect", x0=low, y0=0, x1=current, y1=1,
-                      fillcolor="#3498db", line=dict(color="rgba(0,0,0,0)"), layer="below")
-        # Curseur
-        fig.add_trace(go.Scatter(x=[current], y=[1.3], mode='text', text=["▼"], 
-                                 textfont=dict(size=20, color="#2c3e50"), showlegend=False, hoverinfo='skip'))
+        fig.add_trace(go.Bar(x=dates, y=revenue, name="Chiffre d'Affaires", marker_color='#3498db'))
+        fig.add_trace(go.Bar(x=dates, y=income, name="Bénéfice Net", marker_color='#2ecc71'))
 
         fig.update_layout(
-            title=dict(text="Position Annuelle (Min/Max)", font=dict(size=14, color="#555")),
-            xaxis=dict(range=[low*0.95, high*1.05], showgrid=False, visible=True, 
-                       tickmode='array', tickvals=[low, high], ticktext=[f"{low:.1f}€<br>Min", f"{high:.1f}€<br>Max"],
-                       tickfont=dict(size=12, color="#7f8c8d")),
-            yaxis=dict(showgrid=False, visible=False, range=[0, 2]),
-            margin=dict(t=30, b=20, l=10, r=10), height=120,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+            title=dict(text="Croissance (CA vs Bénéfices)", font=dict(size=14, color="#555")),
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee', tickformat=".2s"),
+            margin=dict(t=40, b=20, l=10, r=10), height=200,
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            legend=dict(orientation="h", y=-0.2), barmode='group'
         )
         return fig
 
@@ -378,22 +381,19 @@ elif page == "Vue Détaillée 🔍":
             st.plotly_chart(plot_candlestick_real(hist), use_container_width=True, config={'displayModeBar': False})
         
         with st.container():
-            st.write("##### 💎 Fondamentaux & Contexte")
+            st.write("##### 💎 Fondamentaux & Santé")
             f1, f2, f3 = st.columns(3)
-            
-            # Indicateurs simples
             margin = info.get('profitMargins', 0)
             f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
-            
             beta = info.get('beta', 0)
             f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité (1 = moyenne).")
-            
             debt = info.get('debtToEquity', 0)
             f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
             
             st.divider()
             
-            # --- AJOUT JAUGE 52 SEMAINES ICI ---
+            # --- REMPLACEMENT ICI : GRAPHIQUE FINANCIER ---
             st.caption(f"🏢 Secteur : **{info.get('sector', 'N/A')}**")
-            if info['yearLow'] and info['yearHigh']:
-                st.plotly_chart(plot_52week_range(info['last'], info['yearLow'], info['yearHigh']), use_container_width=True, config={'displayModeBar': False})
+            # Appel de la nouvelle fonction financière
+            st.plotly_chart(plot_financial_growth(financials), use_container_width=True, config={'displayModeBar': False})
+            # ----------------------------------------------
