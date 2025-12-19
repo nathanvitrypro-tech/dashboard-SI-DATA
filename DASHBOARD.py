@@ -6,24 +6,64 @@ import yfinance as yf
 import numpy as np
 
 # =========================================================
-# 1. CONFIGURATION ET STYLE (CSS)
+# 1. CONFIGURATION ET STYLE (DESIGN SYSTEM)
 # =========================================================
-st.set_page_config(layout="wide", page_title="Market Dashboard Ultimate")
+st.set_page_config(layout="wide", page_title="Market Dashboard Ultimate", page_icon="📈")
 
+# INJECTION DU CSS PERSONNALISÉ
 st.markdown("""
     <style>
-    .stApp { background-color: #f0f2f6; }
+    /* Import de la police Google 'Montserrat' */
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&display=swap');
     
+    /* Application de la police partout */
+    html, body, [class*="css"]  {
+        font-family: 'Montserrat', sans-serif;
+    }
+
+    /* FOND GÉNÉRAL DE L'APPLICATION */
+    .stApp {
+        background-color: #f8f9fa; /* Gris très clair, style 'Business' */
+    }
+    
+    /* BARRE LATÉRALE (SIDEBAR) - STYLE "MIDNIGHT BLUE" */
+    section[data-testid="stSidebar"] {
+        background-color: #0f172a; /* Bleu nuit profond */
+    }
+    section[data-testid="stSidebar"] h1, 
+    section[data-testid="stSidebar"] h2, 
+    section[data-testid="stSidebar"] h3, 
+    section[data-testid="stSidebar"] span, 
+    section[data-testid="stSidebar"] p, 
+    section[data-testid="stSidebar"] div {
+        color: #ecf0f1 !important; /* Texte blanc cassé */
+    }
+    
+    /* STYLE DES CARTES (CONTENEURS BLANCS) */
     div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
         background-color: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 25px;
+        border-radius: 12px;
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05); /* Ombre douce */
         margin-bottom: 20px;
     }
     
-    h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
-    [data-testid="stMetricValue"] { font-size: 24px; }
+    /* TITRES ET MÉTRIQUES */
+    h1, h2, h3 { color: #2c3e50; font-weight: 700; }
+    h5 { color: #7f8c8d; font-weight: 600; margin-bottom: 20px; text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; }
+    
+    /* CHIFFRES EN GROS */
+    [data-testid="stMetricValue"] {
+        font-size: 28px;
+        font-weight: 700;
+        color: #2c3e50;
+    }
+    
+    /* PERSONNALISATION DES BOUTONS RADIO */
+    div[role="radiogroup"] label > div:first-child {
+        background-color: #eef2f6;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -87,11 +127,8 @@ def get_detail_data(symbol, period="1y"):
 
 @st.cache_data(ttl=3600)
 def get_historical_data(symbol, period="1y"):
-    """Récupère l'historique de prix d'un seul symbole (ex: CAC 40)"""
-    try:
-        return yf.Ticker(symbol).history(period=period)['Close']
-    except:
-        return None
+    try: return yf.Ticker(symbol).history(period=period)['Close']
+    except: return None
 
 @st.cache_data(ttl=3600)
 def get_index_data(symbol):
@@ -99,20 +136,25 @@ def get_index_data(symbol):
     except: return None
 
 # =========================================================
-# 3. NAVIGATION
+# 3. NAVIGATION & SIDEBAR
 # =========================================================
-st.sidebar.title("📱 Navigation")
-page = st.sidebar.radio("Aller vers :", ["Vue Globale 🌍", "Vue Détaillée 🔍"])
+st.sidebar.markdown("## 📱 Navigation")
+page = st.sidebar.radio("Menu :", ["Vue Globale 🌍", "Vue Détaillée 🔍"], label_visibility="collapsed")
 
-if st.sidebar.button("🔄 Actualiser tout"):
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 Actualiser les données"):
     st.cache_data.clear()
     st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.info("Dashboard Financier v1.2\nDonnées Yahoo Finance")
 
 # =========================================================
 # PAGE 1 : VUE GLOBALE
 # =========================================================
 if page == "Vue Globale 🌍":
-    st.title("🌍 Vue d'ensemble du CAC 40")
+    # --- CHANGEMENT DU TITRE ICI ---
+    st.title("🇫🇷 Vue d'ensemble du CAC 40")
     
     with st.spinner("Analyse du marché en cours..."):
         df_global = get_global_data()
@@ -151,10 +193,14 @@ if page == "Vue Globale 🌍":
                     first_price = series.iloc[0]
                     normalized_series = ((series - first_price) / first_price) * 100
                     fig_comp.add_trace(go.Scatter(x=series.index, y=normalized_series, mode='lines', name=name, hovertemplate='%{y:.2f}%'))
-        fig_comp.update_layout(hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
-                               yaxis_title="Performance (%)", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                               xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee'),
-                               legend=dict(orientation="h", y=1.02, xanchor="right", x=1))
+        
+        # Style du graphique Global
+        fig_comp.update_layout(
+            hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
+            yaxis_title="Performance (%)", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#f0f0f0'),
+            legend=dict(orientation="h", y=1.02, xanchor="right", x=1)
+        )
         st.plotly_chart(fig_comp, use_container_width=True)
     else:
         st.info("Sélectionnez au moins une entreprise.")
@@ -176,7 +222,7 @@ if page == "Vue Globale 🌍":
                               custom_data=['Prix', 'Variation %'])
         fig_tree.update_traces(textposition="middle center", texttemplate="%{label}<br>%{customdata[1]:.2f}%",
                                hovertemplate='<b>%{label}</b><br>Prix: %{customdata[0]:.2f}€<br>Var: %{customdata[1]:.2f}%')
-        fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600)
+        fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600, paper_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig_tree, use_container_width=True)
 
 # =========================================================
@@ -185,13 +231,12 @@ if page == "Vue Globale 🌍":
 elif page == "Vue Détaillée 🔍":
     
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Sélection Focus")
-    selected_name = st.sidebar.selectbox("Choisir une entreprise :", list(tickers.keys()))
+    st.sidebar.markdown("### Sélection Focus")
+    selected_name = st.sidebar.selectbox("Choisir une entreprise :", list(tickers.keys()), label_visibility="collapsed")
     symbol = tickers[selected_name]
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Période d'analyse")
-    time_period_detail = st.sidebar.radio("Choisir la durée :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "2 Ans", "5 Ans", "10 Ans"], index=3)
+    st.sidebar.markdown("### Période d'analyse")
+    time_period_detail = st.sidebar.radio("Durée :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "2 Ans", "5 Ans", "10 Ans"], index=3, label_visibility="collapsed")
     period_map_detail = {"1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", "1 An": "1y", "2 Ans": "2y", "5 Ans": "5y", "10 Ans": "10y"}
     selected_yahoo_period_detail = period_map_detail[time_period_detail]
 
@@ -206,15 +251,16 @@ elif page == "Vue Détaillée 🔍":
         st.error("Données indisponibles.")
         st.stop()
 
+    # --- FONCTIONS GRAPHIQUES STYLISÉES ---
     def plot_dividend_gauge(yield_val):
         if yield_val is None: val = 0
         else: val = yield_val * 100 if yield_val < 0.5 else yield_val
             
         fig = go.Figure(go.Indicator(
             mode = "gauge+number", value = val, title = {'text': "Rendement Dividende"},
-            number = {'suffix': "%", 'font': {'size': 26}},
-            gauge = {'axis': {'range': [None, 8]}, 'bar': {'color': "#2ecc71"},
-                     'steps': [{'range': [0, 2], 'color': '#ecf0f1'}, {'range': [2, 5], 'color': '#d5f5e3'}, {'range': [5, 8], 'color': '#abebc6'}]}
+            number = {'suffix': "%", 'font': {'size': 26, 'color': '#2c3e50'}},
+            gauge = {'axis': {'range': [None, 8]}, 'bar': {'color': "#27ae60"}, # Vert Pro
+                     'steps': [{'range': [0, 2], 'color': '#ecf0f1'}, {'range': [2, 5], 'color': '#d1f2eb'}, {'range': [5, 8], 'color': '#a9dfbf'}]}
         ))
         fig.update_layout(margin=dict(t=30, b=10, l=30, r=30), height=200, paper_bgcolor='rgba(0,0,0,0)')
         return fig
@@ -226,7 +272,7 @@ elif page == "Vue Détaillée 🔍":
             return 0
         perfs = [{'Label': '1 Sem', 'V': get_var(5)}, {'Label': '1 Mois', 'V': get_var(20)}, 
                  {'Label': '3 Mois', 'V': get_var(60)}, {'Label': '6 Mois', 'V': get_var(120)}]
-        colors = ['#2ecc71' if p['V'] >= 0 else '#e74c3c' for p in perfs]
+        colors = ['#27ae60' if p['V'] >= 0 else '#c0392b' for p in perfs] # Couleurs Pro (Vert/Rouge)
         
         fig = go.Figure(go.Bar(
             x=[p['V'] for p in perfs], y=[p['Label'] for p in perfs], 
@@ -234,7 +280,6 @@ elif page == "Vue Détaillée 🔍":
             text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto', 
             name="Performance (%)"
         ))
-        # CORRECTION ICI : Fermeture des guillemets correctement
         fig.update_layout(
             margin=dict(t=0, b=0, l=0, r=0), height=250, 
             xaxis=dict(showgrid=False), yaxis=dict(showgrid=False), 
@@ -249,15 +294,16 @@ elif page == "Vue Détaillée 🔍":
         df = (df / df.iloc[0]) * 100
         
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df.index, y=df['Stock'], mode='lines', name=stock_name, line=dict(color='#3498db', width=2)))
+        # Ligne Action: Bleu vif Pro | Ligne CAC: Gris discret
+        fig.add_trace(go.Scatter(x=df.index, y=df['Stock'], mode='lines', name=stock_name, line=dict(color='#2980b9', width=2.5)))
         fig.add_trace(go.Scatter(x=df.index, y=df['Benchmark'], mode='lines', name=benchmark_name, line=dict(color='#95a5a6', width=2, dash='dot')))
         
         fig.update_layout(
-            title=f"Performance relative vs {benchmark_name} (Base 100)",
+            title=dict(text=f"Performance vs {benchmark_name} (Base 100)", font=dict(size=14, color="#7f8c8d")),
             margin=dict(t=40, b=0, l=0, r=0), height=250,
             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee', title='Performance (Base 100)'),
-            showlegend=True, legend=dict(orientation="h", y=1.1)
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#f0f0f0', title='Perf. (Base 100)'),
+            showlegend=True, legend=dict(orientation="h", y=1.15)
         )
         return fig
 
@@ -266,8 +312,8 @@ elif page == "Vue Détaillée 🔍":
         df['MA'] = df['Close'].rolling(window=window).mean()
         fig = go.Figure()
         
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Prix (OHLC)'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA'], line=dict(color='orange', width=1), name=f'Moyenne {window}j'))
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Prix'))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA'], line=dict(color='#f39c12', width=1.5), name=f'Moy. {window}j'))
         
         fig.update_layout(
             margin=dict(t=10, b=20, l=0, r=0), height=300, 
@@ -280,7 +326,6 @@ elif page == "Vue Détaillée 🔍":
     def plot_sparkline_real(series, color):
         if series is None: return go.Figure()
         fig = go.Figure(go.Scatter(y=series.values, mode='lines', line=dict(color=color, width=2), name="Cours"))
-        # CORRECTION ICI AUSSI
         fig.update_layout(
             margin=dict(t=0, b=0, l=0, r=0), height=50, 
             xaxis=dict(visible=False), yaxis=dict(visible=False), 
@@ -289,7 +334,7 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
-    # --- MISE EN PAGE DÉTAILLÉE ---
+    # --- STRUCTURE DE LA PAGE ---
     st.title(f"📊 Analyse Focus : {selected_name}")
 
     col_left, col_mid, col_right = st.columns([1, 1.5, 1.5], gap="medium")
@@ -301,7 +346,7 @@ elif page == "Vue Détaillée 🔍":
             st.divider()
             per_val = info['per']
             per_str = f"{per_val:.1f}x" if per_val and per_val > 0 else "N/A"
-            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
+            st.metric("PER (Cours/Bénéfice)", per_str, help="Ratio de cherté de l'action.")
 
         with st.container():
             st.write("##### Derniers Jours")
@@ -320,7 +365,7 @@ elif page == "Vue Détaillée 🔍":
             var_day = ((info['last'] - info['prev']) / info['prev']) * 100
             kpi1.metric("Prix", f"{info['last']:.2f}€")
             kpi2.metric("Var Jour", f"{var_day:+.2f}%", delta=f"{var_day:+.2f}%")
-            kpi3.metric("Market Cap", f"{info['mcap']/1e9:.1f} B€")
+            kpi3.metric("Capitalisation", f"{info['mcap']/1e9:.1f} B€")
             st.divider()
             st.write("##### Performances Historiques")
             st.plotly_chart(plot_performance_bars(hist), use_container_width=True, config={'displayModeBar': False})
@@ -330,7 +375,7 @@ elif page == "Vue Détaillée 🔍":
                 fig_vs_bench = plot_price_vs_benchmark(hist['Close'], cac40_hist_period, selected_name)
                 st.plotly_chart(fig_vs_bench, use_container_width=True, config={'displayModeBar': False})
             else:
-                st.warning("Données du benchmark indisponibles.")
+                st.warning("Benchmark indisponible.")
 
     with col_right:
         with st.container():
@@ -342,6 +387,6 @@ elif page == "Vue Détaillée 🔍":
                 c_spark = st.columns([1, 3])
                 c_spark[0].write(f"**{name}**")
                 if data_idx is not None:
-                    col = '#2ecc71' if data_idx.iloc[-1] > data_idx.iloc[0] else '#e74c3c'
+                    col = '#27ae60' if data_idx.iloc[-1] > data_idx.iloc[0] else '#c0392b'
                     c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True, config={'displayModeBar': False})
                 st.divider()
