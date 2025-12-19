@@ -70,16 +70,26 @@ def get_detail_data(symbol, period="1y"):
         hist = stock.history(period=period)
         inf = stock.info
         
-        dividend_yield = inf.get('dividendYield', 0)
-        trailing_pe = inf.get('trailingPE', 0)
+        # --- NOUVELLES DONNÉES FONDAMENTALES ---
+        data_points = {
+            "dividend": inf.get('dividendYield', 0),
+            "per": inf.get('trailingPE', 0),
+            # Objectif de cours des analystes
+            "targetMeanPrice": inf.get('targetMeanPrice', 0),
+            "recommendationKey": inf.get('recommendationKey', 'N/A'),
+            # Fondamentaux
+            "profitMargins": inf.get('profitMargins', 0), # Marge Nette
+            "beta": inf.get('beta', 0), # Volatilité
+            "debtToEquity": inf.get('debtToEquity', 0) # Dette
+        }
+
         fi = stock.fast_info
         
         info_dict = {
             "last": fi.last_price, 
             "prev": fi.previous_close,
             "mcap": fi.market_cap,
-            "dividend": dividend_yield,
-            "per": trailing_pe
+            **data_points # On fusionne tout
         }
         return hist, info_dict
     except Exception as e:
@@ -87,15 +97,7 @@ def get_detail_data(symbol, period="1y"):
 
 @st.cache_data(ttl=3600)
 def get_historical_data(symbol, period="1y"):
-    """Récupère l'historique de prix d'un seul symbole (ex: CAC 40)"""
-    try:
-        return yf.Ticker(symbol).history(period=period)['Close']
-    except:
-        return None
-
-@st.cache_data(ttl=3600)
-def get_index_data(symbol):
-    try: return yf.Ticker(symbol).history(period="1mo")['Close']
+    try: return yf.Ticker(symbol).history(period=period)['Close']
     except: return None
 
 # =========================================================
@@ -198,14 +200,12 @@ elif page == "Vue Détaillée 🔍":
     with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
         hist, info = get_detail_data(symbol, period=selected_yahoo_period_detail)
         cac40_hist_period = get_historical_data("^FCHI", period=selected_yahoo_period_detail)
-        cac40 = get_index_data("^FCHI")
-        sp500 = get_index_data("^GSPC")
-        bitcoin = get_index_data("BTC-EUR")
 
     if hist is None or hist.empty:
         st.error("Données indisponibles.")
         st.stop()
 
+    # --- JAUGE DIVIDENDE ---
     def plot_dividend_gauge(yield_val):
         if yield_val is None: val = 0
         else: val = yield_val * 100 if yield_val < 0.5 else yield_val
@@ -219,6 +219,7 @@ elif page == "Vue Détaillée 🔍":
         fig.update_layout(margin=dict(t=30, b=10, l=30, r=30), height=200, paper_bgcolor='rgba(0,0,0,0)')
         return fig
 
+    # --- BARRES PERF ---
     def plot_performance_bars(hist):
         last = hist['Close'].iloc[-1]
         def get_var(days):
@@ -234,7 +235,6 @@ elif page == "Vue Détaillée 🔍":
             text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto', 
             name="Performance (%)"
         ))
-        # CORRECTION ICI : Fermeture des guillemets correctement
         fig.update_layout(
             margin=dict(t=0, b=0, l=0, r=0), height=250, 
             xaxis=dict(showgrid=False), yaxis=dict(showgrid=False), 
@@ -243,6 +243,7 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
+    # --- COURBE VS BENCHMARK ---
     def plot_price_vs_benchmark(stock_series, benchmark_series, stock_name, benchmark_name="CAC 40"):
         df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
         df.columns = ['Stock', 'Benchmark']
@@ -261,6 +262,7 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
 
+    # --- BOUGIES ---
     def plot_candlestick_real(df):
         window = 50 if len(df) > 200 else (20 if len(df) > 50 else 5)
         df['MA'] = df['Close'].rolling(window=window).mean()
@@ -277,16 +279,28 @@ elif page == "Vue Détaillée 🔍":
         )
         return fig
     
-    def plot_sparkline_real(series, color):
-        if series is None: return go.Figure()
-        fig = go.Figure(go.Scatter(y=series.values, mode='lines', line=dict(color=color, width=2), name="Cours"))
-        # CORRECTION ICI AUSSI
-        fig.update_layout(
-            margin=dict(t=0, b=0, l=0, r=0), height=50, 
-            xaxis=dict(visible=False), yaxis=dict(visible=False), 
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-            showlegend=False
-        )
+    # --- NOUVEAU : GRAPHIQUE ANALYSTES ---
+    def plot_analyst_target(current_price, target_price):
+        if not target_price or target_price == 0:
+            return go.Figure()
+        
+        upside = ((target_price - current_price) / current_price) * 100
+        color_upside = "#2ecc71" if upside > 0 else "#e74c3c"
+        
+        fig = go.Figure()
+        # Jauge simple
+        fig.add_trace(go.Indicator(
+            mode = "number+gauge+delta", value = current_price,
+            delta = {'reference': target_price, 'position': "top", 'relative': False, 'valueformat': '.2f€'},
+            title = {'text': f"Objectif : {target_price:.2f}€<br><span style='font-size:0.6em;color:{color_upside}'>Potentiel: {upside:+.2f}%</span>"},
+            number = {'suffix': "€", 'font': {'size': 30}},
+            gauge = {
+                'shape': "bullet", 'axis': {'range': [None, max(current_price, target_price)*1.2]},
+                'threshold': {'line': {'color': "black", 'width': 3}, 'thickness': 0.75, 'value': target_price},
+                'bar': {'color': "#3498db"}
+            }
+        ))
+        fig.update_layout(margin=dict(t=40, b=10, l=20, r=20), height=180, paper_bgcolor='rgba(0,0,0,0)')
         return fig
 
     # --- MISE EN PAGE DÉTAILLÉE ---
@@ -304,14 +318,13 @@ elif page == "Vue Détaillée 🔍":
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
 
         with st.container():
-            st.write("##### Derniers Jours")
-            days_to_show = min(5, len(hist))
-            last_days = hist.tail(days_to_show).iloc[::-1].copy()
-            last_days['Variation'] = last_days['Close'].pct_change(-1) * 100
-            df_show = last_days[['Close', 'Variation']].copy()
-            df_show['Close'] = df_show['Close'].map('{:.2f} €'.format)
-            df_show['Variation'] = df_show['Variation'].map('{:+.2f} %'.format)
-            st.table(df_show)
+            # REMPLACEMENT ICI : PLUS DE TABLEAU, MAIS LES ANALYSTES
+            st.write("##### 🎯 Objectif Analystes")
+            if info['targetMeanPrice'] and info['targetMeanPrice'] > 0:
+                st.plotly_chart(plot_analyst_target(info['last'], info['targetMeanPrice']), use_container_width=True, config={'displayModeBar': False})
+                st.info(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
+            else:
+                st.warning("Pas d'objectif de cours disponible.")
 
     with col_mid:
         with st.container():
@@ -336,12 +349,24 @@ elif page == "Vue Détaillée 🔍":
         with st.container():
             st.write(f"##### Analyse Technique ({time_period_detail})")
             st.plotly_chart(plot_candlestick_real(hist), use_container_width=True, config={'displayModeBar': False})
+        
         with st.container():
-            st.write("##### Comparaison Marchés (1 mois)")
-            for name, data_idx in [("CAC 40", cac40), ("S&P 500", sp500), ("Bitcoin", bitcoin)]:
-                c_spark = st.columns([1, 3])
-                c_spark[0].write(f"**{name}**")
-                if data_idx is not None:
-                    col = '#2ecc71' if data_idx.iloc[-1] > data_idx.iloc[0] else '#e74c3c'
-                    c_spark[1].plotly_chart(plot_sparkline_real(data_idx, col), use_container_width=True, config={'displayModeBar': False})
-                st.divider()
+            # REMPLACEMENT ICI : PLUS DE SPARKLINES, MAIS LES FONDAMENTAUX
+            st.write("##### 💎 Fondamentaux & Risque")
+            
+            f1, f2, f3 = st.columns(3)
+            
+            # Marge Nette
+            margin = info.get('profitMargins', 0)
+            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette de l'entreprise")
+            
+            # Beta (Risque)
+            beta = info.get('beta', 0)
+            f2.metric("Bêta (Risque)", f"{beta:.2f}" if beta else "N/A", help="Volatilité par rapport au marché (1 = moyenne)")
+            
+            # Dette
+            debt = info.get('debtToEquity', 0)
+            f3.metric("Dette/Capitaux", f"{debt:.1f}%" if debt else "N/A", help="Niveau d'endettement")
+            
+            st.divider()
+            st.caption("Données fondamentales fournies par Yahoo Finance.")
