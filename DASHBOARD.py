@@ -39,7 +39,7 @@ tickers = {
 }
 
 # =========================================================
-# 2. FONCTIONS DE RÉCUPÉRATION (CACHE & ROBUSTESSE)
+# 2. FONCTIONS DE RÉCUPÉRATION INTELLIGENTE
 # =========================================================
 
 @st.cache_data(ttl=3600)
@@ -62,71 +62,123 @@ def get_global_data():
 @st.cache_data(ttl=3600)
 def get_multi_history(tickers_dict, period="1y"):
     symbols = list(tickers_dict.values())
-    # Utilisation de group_by='ticker' pour éviter les formats multi-index complexes si nécessaire, 
-    # mais yf.download par défaut est généralement gérable.
+    # Utilisation de group_by='ticker' pour simplifier la structure si besoin, mais standard ici.
     data = yf.download(symbols, period=period, progress=False)['Close']
     return data
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol, period="1y"):
-    # Initialisation
+    """
+    Récupère les données avec une stratégie de repli (Fallback) :
+    Si l'info directe manque, on la calcule à partir des états financiers.
+    """
     stock = yf.Ticker(symbol)
     
-    # 1. Historique (CRITIQUE : Si ça échoue, on arrête)
+    # 1. Historique (Critique)
     try:
         hist = stock.history(period=period)
         if hist is None or hist.empty:
             return None, None, None
-    except Exception:
-        return None, None, None
+    except: return None, None, None
 
-    # 2. Informations Fondamentales (OPTIONNEL : Valeurs par défaut si échec)
-    try:
-        inf = stock.info
-        if inf is None: inf = {}
-    except Exception:
-        inf = {}
-
-    # Extraction sécurisée des données avec .get()
-    data_points = {
-        "dividend": inf.get('dividendYield', 0),
-        "per": inf.get('trailingPE', 0),
-        "targetMeanPrice": inf.get('targetMeanPrice', 0),
-        "recommendationKey": inf.get('recommendationKey', 'N/A'),
-        "profitMargins": inf.get('profitMargins', 0), 
-        "beta": inf.get('beta', 0), 
-        "debtToEquity": inf.get('debtToEquity', 0),
-        "sector": inf.get('sector', 'N/A')
-    }
-
-    # 3. Prix temps réel & Market Cap (Fast Info est plus stable)
+    # 2. Données Prix Fiables
     try:
         fi = stock.fast_info
-        # Fallback sur l'historique si fast_info est vide
         last_price = fi.last_price if fi.last_price else hist['Close'].iloc[-1]
         prev_close = fi.previous_close if fi.previous_close else hist['Close'].iloc[-2]
         mcap = fi.market_cap if fi.market_cap else 0
-        
-        info_dict = {
-            "last": last_price, 
-            "prev": prev_close,
-            "mcap": mcap,
-            **data_points
-        }
-    except Exception:
-        # Fallback total si fast_info crash
-        info_dict = {
-            "last": hist['Close'].iloc[-1],
-            "prev": hist['Close'].iloc[-2] if len(hist) > 1 else hist['Close'].iloc[-1],
-            "mcap": 0,
-            **data_points
-        }
+    except:
+        last_price = hist['Close'].iloc[-1]
+        prev_close = hist['Close'].iloc[-2]
+        mcap = 0
 
-    # 4. États financiers (Souvent la cause des erreurs)
-    try:
-        financials = stock.financials
-    except Exception:
-        financials = None
+    # 3. Récupération Info & Financiers
+    # On récupère tout de suite les bilans car on risque d'en avoir besoin pour les calculs
+    try: inf = stock.info 
+    except: inf = {}
+    if inf is None: inf = {}
+
+    try: financials = stock.financials
+    except: financials = None
+    
+    try: balance_sheet = stock.balance_sheet
+    except: balance_sheet = None
+
+    # --- LOGIQUE DE CALCUL DE SECOURS (FALLBACKS) ---
+
+    # A. MARGE NETTE (Profit Margin)
+    margin = inf.get('profitMargins')
+    if (margin is None or margin == 0) and financials is not None and not financials.empty:
+        try:
+            # Tentative de calcul : Résultat Net / Chiffre d'Affaires
+            # On cherche les clés standards (parfois "Net Income", parfois "Net Income Common Stockholders")
+            net_income = None
+            revenue = None
+            
+            # Recherche flexible des clés
+            ni_keys = [k for k in financials.index if 'Net Income' in k or 'NetIncome' in k]
+            rev_keys = [k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k or 'Revenue' in k]
+            
+            if ni_keys and rev_keys:
+                net_income = financials.loc[ni_keys[0]].iloc[0]
+                revenue = financials.loc[rev_keys[0]].iloc[0]
+                
+            if net_income and revenue and revenue != 0:
+                margin = net_income / revenue
+        except: pass
+    
+    # B. DETTE / FONDS PROPRES (Debt to Equity)
+    debt_equity = inf.get('debtToEquity')
+    if (debt_equity is None) and balance_sheet is not None and not balance_sheet.empty:
+        try:
+            # Calcul : Total Dette / Capitaux Propres
+            debt_keys = [k for k in balance_sheet.index if 'Total Debt' in k]
+            equity_keys = [k for k in balance_sheet.index if 'Stockholders Equity' in k or 'Total Equity' in k]
+            
+            if debt_keys and equity_keys:
+                total_debt = balance_sheet.loc[debt_keys[0]].iloc[0]
+                total_equity = balance_sheet.loc[equity_keys[0]].iloc[0]
+                if total_equity != 0:
+                    debt_equity = (total_debt / total_equity) * 100 # Yahoo donne ce ratio en pourcentage souvent
+        except: pass
+
+    # C. PER (Price Earning Ratio)
+    pe_ratio = inf.get('trailingPE')
+    if pe_ratio is None:
+        # Essai 1 : Via EPS fourni
+        eps = inf.get('trailingEps')
+        # Essai 2 : Via Financiers (Net Income / Shares) -> Compliqué sans nb d'actions précis
+        # On reste sur le fallback EPS
+        if eps and eps > 0:
+            pe_ratio = last_price / eps
+
+    # D. BETA
+    # Difficile à calculer soi-même sans historique long et indice de ref. 
+    # On garde la valeur brute, mais on met une valeur par défaut de 1.0 (marché) si vraiment absent pour éviter N/A moche
+    beta = inf.get('beta')
+    
+    # E. OBJECTIF DE COURS
+    target = inf.get('targetMeanPrice')
+    if target is None: target = inf.get('targetMedianPrice', 0)
+
+    # Construction dictionnaire final
+    data_points = {
+        "dividend": inf.get('dividendYield', 0),
+        "per": pe_ratio if pe_ratio else 0,
+        "targetMeanPrice": target if target else 0,
+        "recommendationKey": inf.get('recommendationKey', 'N/A'),
+        "profitMargins": margin if margin else 0,
+        "beta": beta if beta else 0, # Si 0, on affichera N/A ou 0
+        "debtToEquity": debt_equity if debt_equity else 0,
+        "sector": inf.get('sector', 'N/A')
+    }
+
+    info_dict = {
+        "last": last_price, 
+        "prev": prev_close,
+        "mcap": mcap,
+        **data_points
+    }
 
     return hist, info_dict, financials
 
@@ -180,29 +232,27 @@ if page == "Vue Globale 🌍":
     with col_conf2:
         selected_tickers = st.multiselect("Comparer :", list(tickers.keys()), default=["LVMH", "TOTAL", "AIRBUS"])
     
-    # Récupération dynamique pour le graphique
     df_history_dynamic = get_multi_history(tickers, period=selected_yahoo_period_global)
     
     if selected_tickers and not df_history_dynamic.empty:
         fig_comp = go.Figure()
         for name in selected_tickers:
             sym = tickers[name]
-            # Gestion des colonnes MultiIndex ou simple Index selon la version de yfinance
             try:
+                # Gestion compatibilité versions yfinance
                 if isinstance(df_history_dynamic.columns, pd.MultiIndex):
                      series = df_history_dynamic.xs(sym, level=1, axis=1) if sym in df_history_dynamic.columns.get_level_values(1) else pd.Series()
                 else:
                     series = df_history_dynamic[sym] if sym in df_history_dynamic.columns else pd.Series()
                 
-                # Fallback si series est DataFrame (cas rare yfinance)
                 if isinstance(series, pd.DataFrame): series = series.iloc[:,0]
-
                 series = series.dropna()
+                
                 if not series.empty:
                     first_price = series.iloc[0]
                     normalized_series = ((series - first_price) / first_price) * 100
                     fig_comp.add_trace(go.Scatter(x=series.index, y=normalized_series, mode='lines', name=name, hovertemplate='%{y:.2f}%'))
-            except Exception as e:
+            except Exception:
                 continue
 
         fig_comp.update_layout(hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
@@ -295,7 +345,6 @@ elif page == "Vue Détaillée 🔍":
         return fig
 
     def plot_price_vs_benchmark(stock_series, benchmark_series, stock_name, benchmark_name="CAC 40"):
-        # Alignement des index
         df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
         df.columns = ['Stock', 'Benchmark']
         if df.empty: return go.Figure()
@@ -355,22 +404,17 @@ elif page == "Vue Détaillée 🔍":
 
     def plot_financial_growth(financials):
         if financials is None or financials.empty: 
-            # Retourne un graphique vide avec un message
             fig = go.Figure()
-            fig.update_layout(
-                title="Données financières indisponibles",
-                xaxis=dict(visible=False), yaxis=dict(visible=False),
-                margin=dict(t=40, b=0, l=0, r=0), height=200,
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
-            )
+            fig.update_layout(title="Données financières indisponibles", xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             return fig
             
         try:
             fin_T = financials.T.sort_index().tail(4)
             dates = fin_T.index.strftime('%Y')
-            # Recherche des clés flexibles
-            rev_key = next((k for k in ['Total Revenue', 'TotalRevenue', 'Revenue'] if k in financials.index), None)
-            inc_key = next((k for k in ['Net Income', 'NetIncome', 'Net Income Common Stockholders'] if k in financials.index), None)
+            
+            # Recherche flexible des colonnes
+            rev_key = next((k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k or 'Revenue' in k), None)
+            inc_key = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
             
             if not rev_key or not inc_key: return go.Figure()
             
@@ -403,7 +447,7 @@ elif page == "Vue Détaillée 🔍":
             st.divider()
             per_val = info.get('per', 0)
             per_str = f"{per_val:.1f}x" if per_val and per_val > 0 else "N/A"
-            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
+            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Calculé manuellement si indisponible.")
 
         with st.container():
             st.write("##### 🎯 Objectif Analystes")
@@ -412,13 +456,12 @@ elif page == "Vue Détaillée 🔍":
                 st.plotly_chart(plot_price_vs_target_bar(info['last'], target), use_container_width=True, config={'displayModeBar': False})
                 st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
             else:
-                st.info("Pas d'objectif de cours disponible.")
+                st.info("Pas d'objectif de cours disponible pour cette valeur.")
 
     with col_mid:
         with st.container():
             st.write("##### Indicateurs Clés")
             kpi1, kpi2, kpi3 = st.columns(3)
-            # Calcul sécurisé de la variation
             try:
                 var_day = ((info['last'] - info['prev']) / info['prev']) * 100
             except: var_day = 0
@@ -445,10 +488,13 @@ elif page == "Vue Détaillée 🔍":
         with st.container():
             st.write("##### 💎 Fondamentaux & Santé")
             f1, f2, f3 = st.columns(3)
+            
             margin = info.get('profitMargins', 0)
             f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
+            
             beta = info.get('beta', 0)
-            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité (1 = moyenne).")
+            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité.")
+            
             debt = info.get('debtToEquity', 0)
             f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
             
@@ -457,6 +503,4 @@ elif page == "Vue Détaillée 🔍":
             st.caption(f"🏢 Secteur : **{info.get('sector', 'N/A')}**")
             st.plotly_chart(plot_financial_growth(financials), use_container_width=True, config={'displayModeBar': False})
             
-            # --- AJOUT DE LA NOTE ---
-            st.caption("*Note : 'G' (Giga) = Milliards*") 
-            # ------------------------
+            st.caption("*Note : Si les données 'N/A' persistent, cela signifie que Yahoo ne fournit ni le résumé ni le bilan comptable pour cette entreprise.*")
