@@ -3,17 +3,23 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import yfinance as yf
-import numpy as np
+import requests
 
 # =========================================================
-# 1. CONFIGURATION ET STYLE (CSS)
+# 1. CONFIGURATION ET ASTUCE ANTI-BLOCAGE
 # =========================================================
 st.set_page_config(layout="wide", page_title="Market Dashboard Ultimate")
+
+# --- ASTUCE : On crée une session qui imite un navigateur web ---
+# Cela permet souvent de débloquer les données "N/A" de Yahoo
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
 
 st.markdown("""
     <style>
     .stApp { background-color: #f0f2f6; }
-    
     div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
         background-color: white;
         padding: 20px;
@@ -21,15 +27,12 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 20px;
     }
-    
     h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
     [data-testid="stMetricValue"] { font-size: 24px; }
-    
     .caption-text { font-size: 0.8em; color: #888; font-style: italic; }
     </style>
 """, unsafe_allow_html=True)
 
-# Dictionnaire des tickers
 tickers = {
     "LVMH": "MC.PA", "TOTAL": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
     "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA", 
@@ -39,19 +42,8 @@ tickers = {
     "RENAULT": "RNO.PA", "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA"
 }
 
-# Base de données de secours pour les SECTEURS (Car Yahoo plante souvent là-dessus)
-SECTOR_FALLBACK = {
-    "MC.PA": "Luxe & Biens de consommation", "TTE.PA": "Énergie & Pétrole", 
-    "OR.PA": "Cosmétiques", "AIR.PA": "Aéronautique", "SU.PA": "Gestion Énergie",
-    "AI.PA": "Chimie & Gaz", "BNP.PA": "Banque", "GLE.PA": "Banque",
-    "VIE.PA": "Services aux collectivités", "CS.PA": "Assurance", "DG.PA": "Construction",
-    "SAF.PA": "Aéronautique", "RMS.PA": "Luxe", "KER.PA": "Luxe",
-    "SAN.PA": "Santé & Pharma", "EL.PA": "Santé & Optique", "ORA.PA": "Télécoms",
-    "RNO.PA": "Automobile", "CAP.PA": "Technologie", "STMPA.PA": "Semi-conducteurs"
-}
-
 # =========================================================
-# 2. FONCTIONS DE RÉCUPÉRATION (ULTRA ROBUSTES)
+# 2. FONCTIONS DE RÉCUPÉRATION
 # =========================================================
 
 @st.cache_data(ttl=3600)
@@ -59,19 +51,15 @@ def get_global_data():
     global_data = []
     for name, sym in tickers.items():
         try:
-            t = yf.Ticker(sym)
+            # On utilise la session ici aussi
+            t = yf.Ticker(sym, session=session)
             fi = t.fast_info
-            # fast_info est beaucoup plus fiable que info
             last = fi.last_price
             prev = fi.previous_close
             var = ((last - prev) / prev) * 100 if prev else 0
-            
-            # Gestion volume (parfois None)
-            vol = fi.last_volume if fi.last_volume else 0
-            
             global_data.append({
                 "Entreprise": name, "Symbole": sym, "Prix": last,
-                "Variation %": var, "Market Cap": fi.market_cap, "Volume": vol
+                "Variation %": var, "Market Cap": fi.market_cap, "Volume": fi.last_volume
             })
         except: continue
     return pd.DataFrame(global_data)
@@ -79,39 +67,36 @@ def get_global_data():
 @st.cache_data(ttl=3600)
 def get_multi_history(tickers_dict, period="1y"):
     symbols = list(tickers_dict.values())
-    try:
-        data = yf.download(symbols, period=period, progress=False)['Close']
-        return data
-    except:
-        return pd.DataFrame()
+    # yf.download gère les sessions différemment, mais généralement ça passe mieux
+    data = yf.download(symbols, period=period, progress=False)['Close']
+    return data
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol, period="1y"):
-    """
-    Stratégie "Bulldozer" : Si Yahoo ne donne pas l'info, on la calcule nous-mêmes.
-    """
-    stock = yf.Ticker(symbol)
+    # Utilisation de la session pour éviter les blocages
+    stock = yf.Ticker(symbol, session=session)
     
-    # 1. Historique (Indispensable)
+    # 1. Historique
     try:
         hist = stock.history(period=period)
         if hist is None or hist.empty: return None, None, None
     except: return None, None, None
 
-    # 2. Données "Fast Info" (Très fiable pour Prix et MarketCap)
+    # 2. Fast Info (Prix)
     try:
         fi = stock.fast_info
         last_price = fi.last_price if fi.last_price else hist['Close'].iloc[-1]
         prev_close = fi.previous_close if fi.previous_close else hist['Close'].iloc[-2]
         mcap = fi.market_cap if fi.market_cap else 0
-        shares_outstanding = fi.shares if fi.shares else 0
+        shares = fi.shares if fi.shares else 0
     except:
         last_price = hist['Close'].iloc[-1]
         prev_close = hist['Close'].iloc[-2]
         mcap = 0
-        shares_outstanding = 0
+        shares = 0
 
-    # 3. Récupération des États Financiers (Pour les calculs manuels)
+    # 3. Tentative de récupération des Infos Officielles
+    # Si Yahoo bloque, inf sera vide, et on passera aux calculs manuels
     try: inf = stock.info 
     except: inf = {}
     if inf is None: inf = {}
@@ -122,65 +107,52 @@ def get_detail_data(symbol, period="1y"):
     try: balance_sheet = stock.balance_sheet
     except: balance_sheet = None
 
-    # --- CALCULS MANUELS (LA CLÉ DE LA RÉUSSITE) ---
-    
-    # A. Calcul MARGE NETTE
+    # --- CALCULS RÉELS (Pas de Fake Data) ---
+
+    # A. MARGE NETTE
     margin = inf.get('profitMargins')
-    net_income_val = 0
-    revenue_val = 0
-    
-    if (margin is None or margin == 0) and financials is not None and not financials.empty:
+    # Si Yahoo ne donne pas la marge, on la calcule : Net Income / Revenue
+    if (margin is None or margin == 0) and financials is not None:
         try:
-            # On cherche Net Income et Revenue peu importe le nom exact
-            ni_row = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
-            rev_row = next((k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k), None)
-            
-            if ni_row and rev_row:
-                net_income_val = financials.loc[ni_row].iloc[0]
-                revenue_val = financials.loc[rev_row].iloc[0]
-                if revenue_val and revenue_val != 0:
-                    margin = net_income_val / revenue_val
+            ni_key = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
+            rev_key = next((k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k), None)
+            if ni_key and rev_key:
+                ni = financials.loc[ni_key].iloc[0]
+                rev = financials.loc[rev_key].iloc[0]
+                if rev != 0: margin = ni / rev
         except: pass
 
-    # B. Calcul PER (Price Earning Ratio) MANUEL
-    # Formule : Prix Action / (Bénéfice Net / Nombre Actions)
+    # B. PER (Price Earning Ratio)
     pe_ratio = inf.get('trailingPE')
-    
-    if (pe_ratio is None or pe_ratio == 0):
-        # Essai via EPS fourni
-        eps = inf.get('trailingEps')
-        if eps and eps > 0:
-             pe_ratio = last_price / eps
-        # Essai via calcul brut (Si on a le Net Income et le nb d'actions)
-        elif net_income_val != 0 and shares_outstanding != 0:
-            calculated_eps = net_income_val / shares_outstanding
-            if calculated_eps > 0:
-                pe_ratio = last_price / calculated_eps
+    # Si Yahoo ne donne pas le PER, on le calcule : Prix / EPS
+    if (pe_ratio is None) and margin:
+        # On essaie de calculer un EPS approximatif si on a le Net Income
+        try:
+            ni_key = next((k for k in financials.index if 'Net Income' in k), None)
+            if ni_key and shares > 0:
+                ni = financials.loc[ni_key].iloc[0]
+                eps_calc = ni / shares
+                if eps_calc > 0: pe_ratio = last_price / eps_calc
+        except: pass
 
     # C. DETTE
     debt_equity = inf.get('debtToEquity')
-    if (debt_equity is None) and balance_sheet is not None and not balance_sheet.empty:
+    if (debt_equity is None) and balance_sheet is not None:
         try:
-            debt_row = next((k for k in balance_sheet.index if 'Total Debt' in k), None)
-            equity_row = next((k for k in balance_sheet.index if 'Stockholders Equity' in k or 'Total Equity' in k), None)
-            if debt_row and equity_row:
-                debt = balance_sheet.loc[debt_row].iloc[0]
-                equity = balance_sheet.loc[equity_row].iloc[0]
-                if equity != 0:
-                    debt_equity = (debt / equity) * 100
+            d_key = next((k for k in balance_sheet.index if 'Total Debt' in k), None)
+            e_key = next((k for k in balance_sheet.index if 'Stockholders Equity' in k or 'Total Equity' in k), None)
+            if d_key and e_key:
+                debt = balance_sheet.loc[d_key].iloc[0]
+                equity = balance_sheet.loc[e_key].iloc[0]
+                if equity != 0: debt_equity = (debt / equity) * 100
         except: pass
 
-    # D. SECTEUR (Utilisation du dictionnaire de secours)
-    sector = inf.get('sector')
-    if sector is None or sector == "N/A":
-        sector = SECTOR_FALLBACK.get(symbol, "N/A")
-
-    # E. BETA & TARGET
-    # Le Beta est très dur à calculer sans télécharger 5 ans de CAC40. On garde l'info Yahoo ou N/A.
+    # D. BETA & SECTEUR & OBJECTIF
+    # Si ces données manquent, on affiche "N/A" car on ne peut pas les inventer
     beta = inf.get('beta')
-    target = inf.get('targetMeanPrice') or inf.get('targetMedianPrice', 0)
+    sector = inf.get('sector', 'N/A')
+    target = inf.get('targetMeanPrice')
 
-    # Dictionnaire Final
     data_points = {
         "dividend": inf.get('dividendYield', 0),
         "per": pe_ratio if pe_ratio else 0,
@@ -207,7 +179,7 @@ def get_historical_data(symbol, period="1y"):
     except: return None
 
 # =========================================================
-# 3. NAVIGATION
+# 3. NAVIGATION & UI
 # =========================================================
 st.sidebar.title("📱 Navigation")
 page = st.sidebar.radio("Aller vers :", ["Vue Globale 🌍", "Vue Détaillée 🔍"])
@@ -226,7 +198,7 @@ if page == "Vue Globale 🌍":
         df_global = get_global_data()
         
     if df_global.empty:
-        st.error("Impossible de récupérer les données globales. Vérifiez votre connexion.")
+        st.error("Problème de connexion aux données. Réessayez plus tard.")
         st.stop()
 
     best_perf = df_global.loc[df_global['Variation %'].idxmax()]
@@ -421,7 +393,6 @@ elif page == "Vue Détaillée 🔍":
             dates = fin_T.index.strftime('%Y')
             rev_key = next((k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k or 'Revenue' in k), None)
             inc_key = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
-            
             if not rev_key or not inc_key: return go.Figure()
             revenue = fin_T[rev_key]
             income = fin_T[inc_key]
@@ -450,15 +421,13 @@ elif page == "Vue Détaillée 🔍":
             st.plotly_chart(plot_dividend_gauge(info.get('dividend', 0)), use_container_width=True, config={'displayModeBar': False})
             st.divider()
             
-            # Affichage PER
             per_val = info.get('per', 0)
             if per_val and per_val > 0:
                 per_str = f"{per_val:.1f}x"
-                msg_help = "Ratio Cours/Bénéfice (Calculé manuellement si indisponible via Yahoo)"
+                msg_help = "Ratio Cours/Bénéfice (Calcul réel)"
             else:
                 per_str = "N/A"
-                msg_help = "Données insuffisantes pour le calcul."
-                
+                msg_help = "Données indisponibles chez Yahoo (Blocage API)."
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help=msg_help)
 
         with st.container():
@@ -468,7 +437,7 @@ elif page == "Vue Détaillée 🔍":
                 st.plotly_chart(plot_price_vs_target_bar(info['last'], target), use_container_width=True, config={'displayModeBar': False})
                 st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
             else:
-                st.info("Pas d'objectif de cours disponible pour cette valeur.")
+                st.info("Données analystes indisponibles (Protection Yahoo).")
 
     with col_mid:
         with st.container():
@@ -501,17 +470,16 @@ elif page == "Vue Détaillée 🔍":
             f1, f2, f3 = st.columns(3)
             
             margin = info.get('profitMargins', 0)
-            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette (Calc. Manuel si besoin).")
+            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
             
             beta = info.get('beta', 0)
-            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité (1 = moyenne). Si N/A, donnée manquante chez Yahoo.")
+            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Si N/A : Donnée bloquée par Yahoo.")
             
             debt = info.get('debtToEquity', 0)
             f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
             
             st.divider()
             
-            # Affichage Secteur (Sécurisé)
             sec = info.get('sector', 'N/A')
             st.caption(f"🏢 Secteur : **{sec}**")
             
