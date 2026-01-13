@@ -3,19 +3,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import yfinance as yf
-import requests
+import numpy as np
 
 # =========================================================
-# 1. CONFIGURATION ET ASTUCE ANTI-BLOCAGE
+# 1. CONFIGURATION ET STYLE
 # =========================================================
 st.set_page_config(layout="wide", page_title="Market Dashboard Ultimate")
-
-# --- ASTUCE : On crée une session qui imite un navigateur web ---
-# Cela permet souvent de débloquer les données "N/A" de Yahoo
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-})
 
 st.markdown("""
     <style>
@@ -43,7 +36,7 @@ tickers = {
 }
 
 # =========================================================
-# 2. FONCTIONS DE RÉCUPÉRATION
+# 2. FONCTIONS DE RÉCUPÉRATION (VERSION STANDARD + CALCULS)
 # =========================================================
 
 @st.cache_data(ttl=3600)
@@ -51,8 +44,8 @@ def get_global_data():
     global_data = []
     for name, sym in tickers.items():
         try:
-            # On utilise la session ici aussi
-            t = yf.Ticker(sym, session=session)
+            # RETRAIT DE LA SESSION (Correction du crash)
+            t = yf.Ticker(sym)
             fi = t.fast_info
             last = fi.last_price
             prev = fi.previous_close
@@ -67,22 +60,24 @@ def get_global_data():
 @st.cache_data(ttl=3600)
 def get_multi_history(tickers_dict, period="1y"):
     symbols = list(tickers_dict.values())
-    # yf.download gère les sessions différemment, mais généralement ça passe mieux
-    data = yf.download(symbols, period=period, progress=False)['Close']
-    return data
+    try:
+        data = yf.download(symbols, period=period, progress=False)['Close']
+        return data
+    except:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol, period="1y"):
-    # Utilisation de la session pour éviter les blocages
-    stock = yf.Ticker(symbol, session=session)
+    # RETRAIT DE LA SESSION ICI AUSSI
+    stock = yf.Ticker(symbol)
     
-    # 1. Historique
+    # 1. Historique (Base indispensable)
     try:
         hist = stock.history(period=period)
         if hist is None or hist.empty: return None, None, None
     except: return None, None, None
 
-    # 2. Fast Info (Prix)
+    # 2. Fast Info (Prix temps réel fiable)
     try:
         fi = stock.fast_info
         last_price = fi.last_price if fi.last_price else hist['Close'].iloc[-1]
@@ -95,8 +90,7 @@ def get_detail_data(symbol, period="1y"):
         mcap = 0
         shares = 0
 
-    # 3. Tentative de récupération des Infos Officielles
-    # Si Yahoo bloque, inf sera vide, et on passera aux calculs manuels
+    # 3. Récupération Infos & Financiers
     try: inf = stock.info 
     except: inf = {}
     if inf is None: inf = {}
@@ -107,11 +101,11 @@ def get_detail_data(symbol, period="1y"):
     try: balance_sheet = stock.balance_sheet
     except: balance_sheet = None
 
-    # --- CALCULS RÉELS (Pas de Fake Data) ---
+    # --- CALCULS DE SECOURS (Si Yahoo cache l'info) ---
 
     # A. MARGE NETTE
     margin = inf.get('profitMargins')
-    # Si Yahoo ne donne pas la marge, on la calcule : Net Income / Revenue
+    # Calcul manuel si manquant : Net Income / Revenue
     if (margin is None or margin == 0) and financials is not None:
         try:
             ni_key = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
@@ -124,19 +118,25 @@ def get_detail_data(symbol, period="1y"):
 
     # B. PER (Price Earning Ratio)
     pe_ratio = inf.get('trailingPE')
-    # Si Yahoo ne donne pas le PER, on le calcule : Prix / EPS
-    if (pe_ratio is None) and margin:
-        # On essaie de calculer un EPS approximatif si on a le Net Income
+    # Calcul manuel si manquant : Prix / (Bénéfice par action)
+    if (pe_ratio is None or pe_ratio == 0):
         try:
-            ni_key = next((k for k in financials.index if 'Net Income' in k), None)
-            if ni_key and shares > 0:
-                ni = financials.loc[ni_key].iloc[0]
-                eps_calc = ni / shares
-                if eps_calc > 0: pe_ratio = last_price / eps_calc
+            # 1. Via EPS donné par Yahoo
+            eps = inf.get('trailingEps')
+            if eps and eps > 0:
+                pe_ratio = last_price / eps
+            # 2. Via Calcul Brut (Net Income / Shares)
+            elif financials is not None and shares > 0:
+                ni_key = next((k for k in financials.index if 'Net Income' in k), None)
+                if ni_key:
+                    ni = financials.loc[ni_key].iloc[0]
+                    eps_calc = ni / shares
+                    if eps_calc > 0: pe_ratio = last_price / eps_calc
         except: pass
 
     # C. DETTE
     debt_equity = inf.get('debtToEquity')
+    # Calcul manuel : Total Dette / Capitaux Propres
     if (debt_equity is None) and balance_sheet is not None:
         try:
             d_key = next((k for k in balance_sheet.index if 'Total Debt' in k), None)
@@ -147,21 +147,16 @@ def get_detail_data(symbol, period="1y"):
                 if equity != 0: debt_equity = (debt / equity) * 100
         except: pass
 
-    # D. BETA & SECTEUR & OBJECTIF
-    # Si ces données manquent, on affiche "N/A" car on ne peut pas les inventer
-    beta = inf.get('beta')
-    sector = inf.get('sector', 'N/A')
-    target = inf.get('targetMeanPrice')
-
+    # Données statiques
     data_points = {
         "dividend": inf.get('dividendYield', 0),
         "per": pe_ratio if pe_ratio else 0,
-        "targetMeanPrice": target if target else 0,
+        "targetMeanPrice": inf.get('targetMeanPrice', 0),
         "recommendationKey": inf.get('recommendationKey', 'N/A'),
         "profitMargins": margin if margin else 0,
-        "beta": beta if beta else 0, 
+        "beta": inf.get('beta', 0), 
         "debtToEquity": debt_equity if debt_equity else 0,
-        "sector": sector
+        "sector": inf.get('sector', 'N/A')
     }
 
     info_dict = {
@@ -198,7 +193,7 @@ if page == "Vue Globale 🌍":
         df_global = get_global_data()
         
     if df_global.empty:
-        st.error("Problème de connexion aux données. Réessayez plus tard.")
+        st.error("Problème de connexion. Vérifiez si yfinance est à jour.")
         st.stop()
 
     best_perf = df_global.loc[df_global['Variation %'].idxmax()]
@@ -424,10 +419,10 @@ elif page == "Vue Détaillée 🔍":
             per_val = info.get('per', 0)
             if per_val and per_val > 0:
                 per_str = f"{per_val:.1f}x"
-                msg_help = "Ratio Cours/Bénéfice (Calcul réel)"
+                msg_help = "Ratio Cours/Bénéfice (Calculé ou Réel)"
             else:
                 per_str = "N/A"
-                msg_help = "Données indisponibles chez Yahoo (Blocage API)."
+                msg_help = "Donnée manquante."
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help=msg_help)
 
         with st.container():
@@ -437,7 +432,7 @@ elif page == "Vue Détaillée 🔍":
                 st.plotly_chart(plot_price_vs_target_bar(info['last'], target), use_container_width=True, config={'displayModeBar': False})
                 st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
             else:
-                st.info("Données analystes indisponibles (Protection Yahoo).")
+                st.info("Données analystes indisponibles.")
 
     with col_mid:
         with st.container():
@@ -473,7 +468,7 @@ elif page == "Vue Détaillée 🔍":
             f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
             
             beta = info.get('beta', 0)
-            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Si N/A : Donnée bloquée par Yahoo.")
+            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité.")
             
             debt = info.get('debtToEquity', 0)
             f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
