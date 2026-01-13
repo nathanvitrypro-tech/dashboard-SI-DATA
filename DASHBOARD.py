@@ -40,7 +40,7 @@ tickers = {
 }
 
 # =========================================================
-# 2. FONCTIONS DE RÉCUPÉRATION (CACHE)
+# 2. FONCTIONS DE RÉCUPÉRATION (CACHE & SÉCURITÉ)
 # =========================================================
 
 @st.cache_data(ttl=3600)
@@ -68,34 +68,74 @@ def get_multi_history(tickers_dict, period="1y"):
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol, period="1y"):
+    """
+    Version corrigée : Ne plante pas si Yahoo cache le résumé 'info'.
+    """
+    stock = yf.Ticker(symbol)
+    
+    # 1. Historique (CRITIQUE : Si ça échoue, on arrête car pas de graphique possible)
     try:
-        stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
+        if hist is None or hist.empty:
+            return None, None, None
+    except:
+        return None, None, None
+
+    # 2. Informations Fondamentales (FRAGILE : Souvent bloqué)
+    # On isole ce bloc pour qu'il ne fasse pas planter le reste
+    try:
         inf = stock.info
+        if inf is None: inf = {}
+    except:
+        inf = {} 
+
+    # 3. États Financiers
+    try:
         financials = stock.financials
+    except:
+        financials = None
 
-        data_points = {
-            "dividend": inf.get('dividendYield', 0),
-            "per": inf.get('trailingPE', 0),
-            "targetMeanPrice": inf.get('targetMeanPrice', 0),
-            "recommendationKey": inf.get('recommendationKey', 'N/A'),
-            "profitMargins": inf.get('profitMargins', 0), 
-            "beta": inf.get('beta', 0), 
-            "debtToEquity": inf.get('debtToEquity', 0),
-            "sector": inf.get('sector', 'N/A')
-        }
+    # 4. Construction sécurisée (valeurs par défaut si manquantes)
+    data_points = {
+        "dividend": inf.get('dividendYield', 0),
+        "per": inf.get('trailingPE', 0),
+        "targetMeanPrice": inf.get('targetMeanPrice', 0),
+        "recommendationKey": inf.get('recommendationKey', 'N/A'),
+        "profitMargins": inf.get('profitMargins', 0), 
+        "beta": inf.get('beta', 0), 
+        "debtToEquity": inf.get('debtToEquity', 0),
+        "sector": inf.get('sector', 'N/A')
+    }
 
+    # 5. Prix temps réel (Fast Info est plus robuste que Info)
+    try:
         fi = stock.fast_info
+        last_price = fi.last_price if fi.last_price else hist['Close'].iloc[-1]
+        prev_close = fi.previous_close if fi.previous_close else hist['Close'].iloc[-2]
+        mcap = fi.market_cap if fi.market_cap else 0
         
         info_dict = {
-            "last": fi.last_price, 
-            "prev": fi.previous_close,
-            "mcap": fi.market_cap,
+            "last": last_price, 
+            "prev": prev_close,
+            "mcap": mcap,
             **data_points
         }
         return hist, info_dict, financials
-    except Exception as e:
-        return None, None, None
+        
+    except Exception:
+        # Fallback total sur l'historique si fast_info plante aussi
+        try:
+            last = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2] if len(hist) > 1 else last
+            info_dict = {
+                "last": last, 
+                "prev": prev,
+                "mcap": 0,
+                **data_points
+            }
+            return hist, info_dict, financials
+        except:
+            return None, None, None
 
 @st.cache_data(ttl=3600)
 def get_historical_data(symbol, period="1y"):
@@ -121,14 +161,17 @@ if page == "Vue Globale 🌍":
     with st.spinner("Analyse du marché en cours..."):
         df_global = get_global_data()
         
-    best_perf = df_global.loc[df_global['Variation %'].idxmax()]
-    worst_perf = df_global.loc[df_global['Variation %'].idxmin()]
-    total_cap = df_global['Market Cap'].sum() / 1e9
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Top Performance 🚀", f"{best_perf['Entreprise']}", f"{best_perf['Variation %']:.2f} %")
-    col2.metric("Moins bonne Perf 📉", f"{worst_perf['Entreprise']}", f"{worst_perf['Variation %']:.2f} %")
-    col3.metric("Valorisation Totale", f"{total_cap:.2f} Mds €")
+    if not df_global.empty:
+        best_perf = df_global.loc[df_global['Variation %'].idxmax()]
+        worst_perf = df_global.loc[df_global['Variation %'].idxmin()]
+        total_cap = df_global['Market Cap'].sum() / 1e9
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Top Performance 🚀", f"{best_perf['Entreprise']}", f"{best_perf['Variation %']:.2f} %")
+        col2.metric("Moins bonne Perf 📉", f"{worst_perf['Entreprise']}", f"{worst_perf['Variation %']:.2f} %")
+        col3.metric("Valorisation Totale", f"{total_cap:.2f} Mds €")
+    else:
+        st.warning("Aucune donnée globale disponible pour le moment.")
     
     st.divider()
 
@@ -145,43 +188,55 @@ if page == "Vue Globale 🌍":
     
     df_history_dynamic = get_multi_history(tickers, period=selected_yahoo_period_global)
     
-    if selected_tickers:
+    if selected_tickers and not df_history_dynamic.empty:
         fig_comp = go.Figure()
         for name in selected_tickers:
             sym = tickers[name]
-            if sym in df_history_dynamic.columns:
-                series = df_history_dynamic[sym].dropna()
+            # Gestion safe des colonnes (MultiIndex ou simple)
+            try:
+                if isinstance(df_history_dynamic.columns, pd.MultiIndex):
+                     series = df_history_dynamic.xs(sym, level=1, axis=1) if sym in df_history_dynamic.columns.get_level_values(1) else pd.Series()
+                else:
+                    series = df_history_dynamic[sym] if sym in df_history_dynamic.columns else pd.Series()
+                
+                # Nettoyage
+                if isinstance(series, pd.DataFrame): series = series.iloc[:,0]
+                series = series.dropna()
+
                 if not series.empty:
                     first_price = series.iloc[0]
                     normalized_series = ((series - first_price) / first_price) * 100
                     fig_comp.add_trace(go.Scatter(x=series.index, y=normalized_series, mode='lines', name=name, hovertemplate='%{y:.2f}%'))
+            except: continue
+
         fig_comp.update_layout(hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
                                yaxis_title="Performance (%)", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                                xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee'),
                                legend=dict(orientation="h", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_comp, use_container_width=True)
     else:
-        st.info("Sélectionnez au moins une entreprise.")
+        st.info("Sélectionnez au moins une entreprise ou attendez le chargement.")
     
     st.divider()
     
-    c1, c2 = st.columns([1.5, 1])
-    with c1:
-        st.subheader("📊 Tableau des Prix")
-        st.dataframe(df_global.style.format({"Prix": "{:.2f} €", "Variation %": "{:+.2f} %", "Market Cap": "{:,.0f}"})
-                     .background_gradient(subset=["Variation %"], cmap="RdYlGn", vmin=-3, vmax=3),
-                     use_container_width=True, height=600,
-                     column_config={"Volume": st.column_config.ProgressColumn("Volume", format="%d", min_value=0, max_value=int(df_global['Volume'].max())),
-                                    "Market Cap": st.column_config.NumberColumn("Market Cap", format="%.2e €")})
-    with c2:
-        st.subheader("🗺️ Carte (Market Cap)")
-        fig_tree = px.treemap(df_global, path=['Entreprise'], values='Market Cap', color='Variation %',
-                              color_continuous_scale=['#e74c3c', '#ecf0f1', '#2ecc71'], color_continuous_midpoint=0,
-                              custom_data=['Prix', 'Variation %'])
-        fig_tree.update_traces(textposition="middle center", texttemplate="%{label}<br>%{customdata[1]:.2f}%",
-                               hovertemplate='<b>%{label}</b><br>Prix: %{customdata[0]:.2f}€<br>Var: %{customdata[1]:.2f}%')
-        fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600)
-        st.plotly_chart(fig_tree, use_container_width=True)
+    if not df_global.empty:
+        c1, c2 = st.columns([1.5, 1])
+        with c1:
+            st.subheader("📊 Tableau des Prix")
+            st.dataframe(df_global.style.format({"Prix": "{:.2f} €", "Variation %": "{:+.2f} %", "Market Cap": "{:,.0f}"})
+                         .background_gradient(subset=["Variation %"], cmap="RdYlGn", vmin=-3, vmax=3),
+                         use_container_width=True, height=600,
+                         column_config={"Volume": st.column_config.ProgressColumn("Volume", format="%d", min_value=0, max_value=int(df_global['Volume'].max())),
+                                        "Market Cap": st.column_config.NumberColumn("Market Cap", format="%.2e €")})
+        with c2:
+            st.subheader("🗺️ Carte (Market Cap)")
+            fig_tree = px.treemap(df_global, path=['Entreprise'], values='Market Cap', color='Variation %',
+                                  color_continuous_scale=['#e74c3c', '#ecf0f1', '#2ecc71'], color_continuous_midpoint=0,
+                                  custom_data=['Prix', 'Variation %'])
+            fig_tree.update_traces(textposition="middle center", texttemplate="%{label}<br>%{customdata[1]:.2f}%",
+                                   hovertemplate='<b>%{label}</b><br>Prix: %{customdata[0]:.2f}€<br>Var: %{customdata[1]:.2f}%')
+            fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600)
+            st.plotly_chart(fig_tree, use_container_width=True)
 
 # =========================================================
 # PAGE 2 : VUE DÉTAILLÉE
@@ -204,7 +259,7 @@ elif page == "Vue Détaillée 🔍":
         cac40_hist_period = get_historical_data("^FCHI", period=selected_yahoo_period_detail)
 
     if hist is None or hist.empty:
-        st.error("Données indisponibles.")
+        st.error("Données indisponibles (Probablement un blocage temporaire Yahoo ou pas de connexion).")
         st.stop()
 
     # --- FONCTIONS GRAPHIQUES ---
@@ -245,8 +300,11 @@ elif page == "Vue Détaillée 🔍":
         return fig
 
     def plot_price_vs_benchmark(stock_series, benchmark_series, stock_name, benchmark_name="CAC 40"):
+        # Alignement des index
         df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
         df.columns = ['Stock', 'Benchmark']
+        if df.empty: return go.Figure()
+
         df = (df / df.iloc[0]) * 100
         
         fig = go.Figure()
@@ -301,13 +359,19 @@ elif page == "Vue Détaillée 🔍":
         return fig
 
     def plot_financial_growth(financials):
-        if financials is None or financials.empty: return go.Figure()
+        if financials is None or financials.empty: 
+            return go.Figure()
+        
         try:
             fin_T = financials.T.sort_index().tail(4)
             dates = fin_T.index.strftime('%Y')
+            
+            # Recherche flexible des colonnes
             rev_key = next((k for k in ['Total Revenue', 'TotalRevenue', 'Revenue'] if k in financials.index), None)
             inc_key = next((k for k in ['Net Income', 'NetIncome', 'Net Income Common Stockholders'] if k in financials.index), None)
+            
             if not rev_key or not inc_key: return go.Figure()
+            
             revenue = fin_T[rev_key]
             income = fin_T[inc_key]
         except: return go.Figure()
@@ -333,25 +397,29 @@ elif page == "Vue Détaillée 🔍":
     with col_left:
         with st.container():
             st.write("##### Rendement & Valorisation")
-            st.plotly_chart(plot_dividend_gauge(info['dividend']), use_container_width=True, config={'displayModeBar': False})
+            st.plotly_chart(plot_dividend_gauge(info.get('dividend', 0)), use_container_width=True, config={'displayModeBar': False})
             st.divider()
-            per_val = info['per']
+            per_val = info.get('per', 0)
             per_str = f"{per_val:.1f}x" if per_val and per_val > 0 else "N/A"
             st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
 
         with st.container():
             st.write("##### 🎯 Objectif Analystes")
-            if info['targetMeanPrice'] and info['targetMeanPrice'] > 0:
-                st.plotly_chart(plot_price_vs_target_bar(info['last'], info['targetMeanPrice']), use_container_width=True, config={'displayModeBar': False})
+            target = info.get('targetMeanPrice', 0)
+            if target and target > 0:
+                st.plotly_chart(plot_price_vs_target_bar(info['last'], target), use_container_width=True, config={'displayModeBar': False})
                 st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
             else:
-                st.warning("Pas d'objectif de cours disponible.")
+                st.info("Données analystes momentanément indisponibles.")
 
     with col_mid:
         with st.container():
             st.write("##### Indicateurs Clés")
             kpi1, kpi2, kpi3 = st.columns(3)
-            var_day = ((info['last'] - info['prev']) / info['prev']) * 100
+            try:
+                var_day = ((info['last'] - info['prev']) / info['prev']) * 100
+            except: var_day = 0
+            
             kpi1.metric("Prix", f"{info['last']:.2f}€")
             kpi2.metric("Var Jour", f"{var_day:+.2f}%", delta=f"{var_day:+.2f}%")
             kpi3.metric("Market Cap", f"{info['mcap']/1e9:.1f} B€")
