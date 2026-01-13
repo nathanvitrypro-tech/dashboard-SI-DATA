@@ -8,3 +8,4 @@ xlsxwriter
 lxml
 requests
 matplotlib
+yfinance==0.2.36
