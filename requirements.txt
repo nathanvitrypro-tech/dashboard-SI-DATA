@@ -1,6 +1,6 @@
 streamlit
 pandas
-yfinance==0.2.36
+yfinance
 plotly
 numpy
 openpyxl
@@ -8,5 +8,6 @@ xlsxwriter
 lxml
 requests
 matplotlib
+
 
 
