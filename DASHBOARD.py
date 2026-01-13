@@ -6,386 +6,350 @@ import yfinance as yf
 import numpy as np
 
 # =========================================================
-# 1. CONFIGURATION ET STYLE (CSS)
+# 1. CONFIGURATION & STYLE (HEDGE FUND THEME)
 # =========================================================
-st.set_page_config(layout="wide", page_title="Market Dashboard Ultimate")
+st.set_page_config(layout="wide", page_title="CAC 40 Pro Dash", page_icon="🇫🇷")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #f0f2f6; }
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;800&display=swap');
     
-    div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
-        background-color: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        margin-bottom: 20px;
+    html, body, [class*="css"]  {
+        font-family: 'Montserrat', sans-serif;
+        color: #e0e0e0;
     }
     
-    h5 { color: #555; font-weight: 600; margin-bottom: 15px; }
-    [data-testid="stMetricValue"] { font-size: 24px; }
+    .stApp {
+        background: rgb(10,10,25);
+        background: linear-gradient(170deg, rgba(10,10,25,1) 0%, rgba(20,5,40,1) 60%, rgba(0,0,0,1) 100%);
+        background-attachment: fixed;
+    }
     
-    /* Style pour la note de bas de page */
-    .caption-text { font-size: 0.8em; color: #888; font-style: italic; }
+    .block-container { 
+        padding-top: 4rem !important; 
+        padding-bottom: 2rem; 
+    }
+    
+    /* --- TOOLTIPS & CARDS --- */
+    .tooltip-icon {
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        width: 14px;
+        height: 14px;
+        background-color: rgba(255,255,255,0.2);
+        color: #e0e0e0;
+        border-radius: 50%;
+        font-size: 9px;
+        margin-left: 6px;
+        cursor: help;
+        vertical-align: middle;
+        position: relative;
+        top: -1px;
+    }
+    .tooltip-icon:hover { background-color: rgba(255,255,255,0.8); color: #000; }
+
+    .kpi-card {
+        background-color: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        height: 100%;
+    }
+    
+    .kpi-title {
+        color: #BBBBBB !important; font-size: 0.75rem; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 1px; display: inline-block;
+    }
+    
+    .kpi-value {
+        font-size: 1.5rem; font-weight: 800; color: #FFFFFF;
+        background: linear-gradient(90deg, #00f2c3, #0099ff);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    
+    .kpi-detail { font-size: 0.8rem; margin-top: 2px; }
+    .kpi-delta-pos { color: #00f2c3; font-weight: bold; }
+    .kpi-delta-neg { color: #ff0055; font-weight: bold; }
+    .kpi-delta-neutral { color: #888; }
+    
+    .scorecard {
+        background-color: rgba(255,255,255,0.05); padding: 12px;
+        border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 8px;
+    }
+    .score-title {
+        color: #FFFFFF !important; font-size: 0.75em; font-weight: 800;
+        text-transform: uppercase; letter-spacing: 1px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
+# --- LISTE DES ACTIONS CAC 40 ---
 tickers = {
-    "LVMH": "MC.PA", "TOTAL": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
+    "LVMH": "MC.PA", "TOTALENERGIES": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
     "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA", 
-    "SOCIETE GENERALE": "GLE.PA", "VEOLIA": "VIE.PA",
-    "AXA": "CS.PA", "VINCI": "DG.PA", "SAFRAN": "SAF.PA", "HERMES": "RMS.PA", 
-    "KERING": "KER.PA", "SANOFI": "SAN.PA", "ESSILOR": "EL.PA", "ORANGE": "ORA.PA",
-    "RENAULT": "RNO.PA", "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA"
+    "SOCIETE GENERALE": "GLE.PA", "AXA": "CS.PA", "VINCI": "DG.PA", 
+    "SAFRAN": "SAF.PA", "HERMES": "RMS.PA", "KERING": "KER.PA", 
+    "SANOFI": "SAN.PA", "ORANGE": "ORA.PA", "RENAULT": "RNO.PA", 
+    "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA", "MICHELIN": "ML.PA", "DANONE": "BN.PA"
 }
 
 # =========================================================
-# 2. FONCTIONS DE RÉCUPÉRATION (CACHE)
+# 2. CALCULS & DONNÉES (ROBUSTE)
 # =========================================================
+def calculate_advanced_stats(data, index_data):
+    # RSI
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    data['RSI'] = 100 - (100 / (1 + gain/loss))
+    
+    # Moyennes Mobiles
+    data['SMA50'] = data['Close'].rolling(50).mean()
+    data['SMA200'] = data['Close'].rolling(200).mean()
+    
+    # Corrélation (Sécurisée)
+    corr = 0
+    if index_data is not None and not index_data.empty:
+        try:
+            # On aligne les dates
+            common_idx = data.index.intersection(index_data.index)
+            if len(common_idx) > 10:
+                corr = data.loc[common_idx]['Close'].pct_change().corr(index_data.loc[common_idx]['Close'].pct_change())
+        except:
+            corr = 0 
+    
+    # Win Rate
+    green_days = len(data[data['Close'] > data['Open']])
+    total_days = len(data)
+    win_rate = (green_days / total_days) * 100 if total_days > 0 else 0
+    
+    # Volume Trend
+    vol_short = data['Volume'].tail(5).mean()
+    vol_long = data['Volume'].tail(20).mean()
+    vol_trend = ((vol_short - vol_long) / vol_long) * 100 if vol_long > 0 else 0
+    
+    # Ratio Sharpe
+    returns = data['Close'].pct_change().dropna()
+    sharpe = (returns.mean() / returns.std()) * np.sqrt(252) if returns.std() != 0 else 0
+    
+    return data, {
+        "corr_index": corr if not pd.isna(corr) else 0,
+        "win_rate": win_rate, 
+        "vol_trend": vol_trend,
+        "sharpe": sharpe, 
+        "volatility_day": returns.std() * 100
+    }
 
 @st.cache_data(ttl=3600)
-def get_global_data():
-    global_data = []
-    for name, sym in tickers.items():
+def get_data(symbol, period="1y"):
+    try:
+        # 1. On récupère l'action (CRITIQUE)
+        tk = yf.Ticker(symbol)
+        data = tk.history(period=period)
+        
+        if data.empty: return None, None
+        
+        # 2. On essaie de récupérer le CAC 40 (OPTIONNEL)
         try:
-            t = yf.Ticker(sym)
+            index_data = yf.Ticker("^FCHI").history(period=period)
+        except:
+            index_data = None # Si ça plante, on continue sans
+        
+        # 3. Calculs
+        data, stats = calculate_advanced_stats(data, index_data)
+        
+        info = tk.fast_info
+        # Sécurité sur le prix en direct
+        stats['last'] = info.last_price if info.last_price else data['Close'].iloc[-1]
+        stats['prev'] = info.previous_close if info.previous_close else data['Close'].iloc[-2]
+        
+        return data, stats
+        
+    except: return None, None
+
+@st.cache_data(ttl=3600)
+def get_global_market():
+    global_data = []
+    for n, s in tickers.items():
+        try:
+            t = yf.Ticker(s)
+            hist = t.history(period="1mo") 
             fi = t.fast_info
-            last = fi.last_price
-            prev = fi.previous_close
-            var = ((last - prev) / prev) * 100 if prev else 0
-            global_data.append({
-                "Entreprise": name, "Symbole": sym, "Prix": last,
-                "Variation %": var, "Market Cap": fi.market_cap, "Volume": fi.last_volume
-            })
+            
+            if fi.last_price is not None and not hist.empty:
+                var = ((fi.last_price - fi.previous_close)/fi.previous_close)*100
+                volatility = hist['Close'].pct_change().std() * 100 
+                
+                global_data.append({
+                    "Action": n, "Symbole": s, 
+                    "Prix": fi.last_price, "Variation": var, 
+                    "Volume": fi.last_volume, "Volatilité": volatility
+                })
         except: continue
     return pd.DataFrame(global_data)
 
-@st.cache_data(ttl=3600)
-def get_multi_history(tickers_dict, period="1y"):
-    symbols = list(tickers_dict.values())
-    data = yf.download(symbols, period=period, progress=False)['Close']
-    return data
-
-@st.cache_data(ttl=3600)
-def get_detail_data(symbol, period="1y"):
-    try:
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period=period)
-        inf = stock.info
-        financials = stock.financials
-
-        data_points = {
-            "dividend": inf.get('dividendYield', 0),
-            "per": inf.get('trailingPE', 0),
-            "targetMeanPrice": inf.get('targetMeanPrice', 0),
-            "recommendationKey": inf.get('recommendationKey', 'N/A'),
-            "profitMargins": inf.get('profitMargins', 0), 
-            "beta": inf.get('beta', 0), 
-            "debtToEquity": inf.get('debtToEquity', 0),
-            "sector": inf.get('sector', 'N/A')
-        }
-
-        fi = stock.fast_info
-        
-        info_dict = {
-            "last": fi.last_price, 
-            "prev": fi.previous_close,
-            "mcap": fi.market_cap,
-            **data_points
-        }
-        return hist, info_dict, financials
-    except Exception as e:
-        return None, None, None
-
-@st.cache_data(ttl=3600)
-def get_historical_data(symbol, period="1y"):
-    try: return yf.Ticker(symbol).history(period=period)['Close']
-    except: return None
-
 # =========================================================
-# 3. NAVIGATION
+# 3. INTERFACE
 # =========================================================
-st.sidebar.title("📱 Navigation")
-page = st.sidebar.radio("Aller vers :", ["Vue Globale 🌍", "Vue Détaillée 🔍"])
+st.sidebar.title("🇫🇷 CAC 40 Pro")
+page = st.sidebar.radio("Navigation", ["Vue Globale 🌍", "Deep Dive 🔍"])
+if st.sidebar.button("🔄 Refresh"): st.cache_data.clear(); st.rerun()
 
-if st.sidebar.button("🔄 Actualiser tout"):
-    st.cache_data.clear()
-    st.rerun()
+c_up = "#00f2c3"
+c_down = "#ff0055"
 
-# =========================================================
-# PAGE 1 : VUE GLOBALE
-# =========================================================
+# --- PAGE 1 : VUE GLOBALE ---
 if page == "Vue Globale 🌍":
-    st.title("🌍 Vue d'ensemble du CAC 40")
+    st.title("🌍 Vue d'ensemble (Paris)")
+    with st.spinner("Analyse du CAC 40..."):
+        df = get_global_market()
     
-    with st.spinner("Analyse du marché en cours..."):
-        df_global = get_global_data()
+    if not df.empty:
+        c1, c2, c3 = st.columns(3)
+        best = df.loc[df['Variation'].idxmax()]
+        worst = df.loc[df['Variation'].idxmin()]
+        c1.metric("TOP PERF", best['Action'], f"{best['Variation']:.2f}%")
+        c2.metric("FLOP PERF", worst['Action'], f"{worst['Variation']:.2f}%")
+        c3.metric("LEADER VOLUME", df.sort_values('Volume', ascending=False).iloc[0]['Action'])
+        st.divider()
         
-    best_perf = df_global.loc[df_global['Variation %'].idxmax()]
-    worst_perf = df_global.loc[df_global['Variation %'].idxmin()]
-    total_cap = df_global['Market Cap'].sum() / 1e9
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Top Performance 🚀", f"{best_perf['Entreprise']}", f"{best_perf['Variation %']:.2f} %")
-    col2.metric("Moins bonne Perf 📉", f"{worst_perf['Entreprise']}", f"{worst_perf['Variation %']:.2f} %")
-    col3.metric("Valorisation Totale", f"{total_cap:.2f} Mds €")
-    
-    st.divider()
+        c_chart, c_list = st.columns([2, 1])
+        with c_chart:
+            st.subheader("🎯 Matrice Risque / Gain")
+            st.caption("ℹ️ HAUT = Gains | GAUCHE = Stable | DROITE = Risqué")
+            
+            fig = px.scatter(
+                df, x="Volatilité", y="Variation", 
+                size="Volume", color="Variation", 
+                text="Symbole", hover_name="Action",
+                color_continuous_scale="RdYlGn",
+                labels={"Volatilité": "RISQUE (Volatilité)", "Variation": "GAIN (24h)"}
+            )
+            
+            fig.update_traces(
+                textposition='top center', 
+                marker=dict(line=dict(width=1, color='white'), opacity=0.9),
+                textfont=dict(color='white', size=11)
+            )
+            fig.update_layout(
+                height=450, 
+                paper_bgcolor='rgba(0,0,0,0)', 
+                plot_bgcolor='rgba(255,255,255,0.05)',
+                xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', zeroline=False),
+                yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', zeroline=False)
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("📈 Comparateur de Performance (Base 100)")
-    col_conf1, col_conf2 = st.columns([1, 2])
-    
-    with col_conf1:
-        time_period_global = st.radio("Période Globale :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "5 Ans", "10 Ans"], index=3, horizontal=True)
-        period_map_global = {"1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", "1 An": "1y", "5 Ans": "5y", "10 Ans": "10y"}
-        selected_yahoo_period_global = period_map_global[time_period_global]
+        with c_list:
+            st.subheader("Cotations")
+            st.dataframe(
+                df[['Action', 'Prix', 'Variation']].style.format({"Prix": "{:.2f}€", "Variation": "{:+.2f}%"})
+                .background_gradient(subset=['Variation'], cmap="RdYlGn", vmin=-3, vmax=3), 
+                height=450, 
+                use_container_width=True
+            )
 
-    with col_conf2:
-        selected_tickers = st.multiselect("Comparer :", list(tickers.keys()), default=["LVMH", "TOTAL", "AIRBUS"])
-    
-    df_history_dynamic = get_multi_history(tickers, period=selected_yahoo_period_global)
-    
-    if selected_tickers:
-        fig_comp = go.Figure()
-        for name in selected_tickers:
-            sym = tickers[name]
-            if sym in df_history_dynamic.columns:
-                series = df_history_dynamic[sym].dropna()
-                if not series.empty:
-                    first_price = series.iloc[0]
-                    normalized_series = ((series - first_price) / first_price) * 100
-                    fig_comp.add_trace(go.Scatter(x=series.index, y=normalized_series, mode='lines', name=name, hovertemplate='%{y:.2f}%'))
-        fig_comp.update_layout(hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
-                               yaxis_title="Performance (%)", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                               xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee'),
-                               legend=dict(orientation="h", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig_comp, use_container_width=True)
-    else:
-        st.info("Sélectionnez au moins une entreprise.")
-    
-    st.divider()
-    
-    c1, c2 = st.columns([1.5, 1])
-    with c1:
-        st.subheader("📊 Tableau des Prix")
-        st.dataframe(df_global.style.format({"Prix": "{:.2f} €", "Variation %": "{:+.2f} %", "Market Cap": "{:,.0f}"})
-                     .background_gradient(subset=["Variation %"], cmap="RdYlGn", vmin=-3, vmax=3),
-                     use_container_width=True, height=600,
-                     column_config={"Volume": st.column_config.ProgressColumn("Volume", format="%d", min_value=0, max_value=int(df_global['Volume'].max())),
-                                    "Market Cap": st.column_config.NumberColumn("Market Cap", format="%.2e €")})
-    with c2:
-        st.subheader("🗺️ Carte (Market Cap)")
-        fig_tree = px.treemap(df_global, path=['Entreprise'], values='Market Cap', color='Variation %',
-                              color_continuous_scale=['#e74c3c', '#ecf0f1', '#2ecc71'], color_continuous_midpoint=0,
-                              custom_data=['Prix', 'Variation %'])
-        fig_tree.update_traces(textposition="middle center", texttemplate="%{label}<br>%{customdata[1]:.2f}%",
-                               hovertemplate='<b>%{label}</b><br>Prix: %{customdata[0]:.2f}€<br>Var: %{customdata[1]:.2f}%')
-        fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600)
-        st.plotly_chart(fig_tree, use_container_width=True)
-
-# =========================================================
-# PAGE 2 : VUE DÉTAILLÉE
-# =========================================================
-elif page == "Vue Détaillée 🔍":
-    
+# --- PAGE 2 : DEEP DIVE ---
+elif page == "Deep Dive 🔍":
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Sélection Focus")
-    selected_name = st.sidebar.selectbox("Choisir une entreprise :", list(tickers.keys()))
-    symbol = tickers[selected_name]
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Période d'analyse")
-    time_period_detail = st.sidebar.radio("Choisir la durée :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "2 Ans", "5 Ans", "10 Ans"], index=3)
-    period_map_detail = {"1 Mois": "1mo", "3 Mois": "3mo", "6 Mois": "6mo", "1 An": "1y", "2 Ans": "2y", "5 Ans": "5y", "10 Ans": "10y"}
-    selected_yahoo_period_detail = period_map_detail[time_period_detail]
-
-    with st.spinner(f"Chargement des données ({time_period_detail}) de {selected_name}..."):
-        hist, info, financials = get_detail_data(symbol, period=selected_yahoo_period_detail)
-        cac40_hist_period = get_historical_data("^FCHI", period=selected_yahoo_period_detail)
-
-    if hist is None or hist.empty:
-        st.error("Données indisponibles.")
+    sel = st.sidebar.selectbox("Action :", list(tickers.keys()))
+    sym = tickers[sel]
+    
+    time_frame = st.sidebar.radio("Période :", ["6 Mois", "1 An", "5 Ans"], index=1, horizontal=True)
+    p_map = {"6 Mois": "6mo", "1 An": "1y", "5 Ans": "5y"}
+    
+    with st.spinner(f"Analyse de {sel}..."):
+        hist, stats = get_data(sym, p_map[time_frame])
+        
+    if hist is None: 
+        st.error("Erreur de données (Yahoo API). L'action semble inaccessible.")
         st.stop()
 
-    # --- FONCTIONS GRAPHIQUES ---
-    def plot_dividend_gauge(yield_val):
-        if yield_val is None: val = 0
-        else: val = yield_val * 100 if yield_val < 0.5 else yield_val
-            
-        fig = go.Figure(go.Indicator(
-            mode = "gauge+number", value = val, title = {'text': "Rendement Dividende"},
-            number = {'suffix': "%", 'font': {'size': 26}},
-            gauge = {'axis': {'range': [None, 8]}, 'bar': {'color': "#2ecc71"},
-                     'steps': [{'range': [0, 2], 'color': '#ecf0f1'}, {'range': [2, 5], 'color': '#d5f5e3'}, {'range': [5, 8], 'color': '#abebc6'}]}
-        ))
-        fig.update_layout(margin=dict(t=30, b=10, l=30, r=30), height=200, paper_bgcolor='rgba(0,0,0,0)')
-        return fig
-
-    def plot_performance_bars(hist):
-        last = hist['Close'].iloc[-1]
-        def get_var(days):
-            if len(hist) > days: return ((last - hist['Close'].iloc[-days]) / hist['Close'].iloc[-days]) * 100
-            return 0
-        perfs = [{'Label': '1 Sem', 'V': get_var(5)}, {'Label': '1 Mois', 'V': get_var(20)}, 
-                 {'Label': '3 Mois', 'V': get_var(60)}, {'Label': '6 Mois', 'V': get_var(120)}]
-        colors = ['#2ecc71' if p['V'] >= 0 else '#e74c3c' for p in perfs]
-        
-        fig = go.Figure(go.Bar(
-            x=[p['V'] for p in perfs], y=[p['Label'] for p in perfs], 
-            orientation='h', marker_color=colors, 
-            text=[f"{p['V']:+.1f}%" for p in perfs], textposition='auto', 
-            name="Performance (%)"
-        ))
-        fig.update_layout(
-            margin=dict(t=0, b=0, l=0, r=0), height=250, 
-            xaxis=dict(showgrid=False), yaxis=dict(showgrid=False), 
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-            showlegend=True, legend=dict(orientation="h", y=-0.1)
-        )
-        return fig
-
-    def plot_price_vs_benchmark(stock_series, benchmark_series, stock_name, benchmark_name="CAC 40"):
-        df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
-        df.columns = ['Stock', 'Benchmark']
-        df = (df / df.iloc[0]) * 100
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df.index, y=df['Stock'], mode='lines', name=stock_name, line=dict(color='#3498db', width=2)))
-        fig.add_trace(go.Scatter(x=df.index, y=df['Benchmark'], mode='lines', name=benchmark_name, line=dict(color='#95a5a6', width=2, dash='dot')))
-        
-        fig.update_layout(
-            title=f"Performance relative vs {benchmark_name} (Base 100)",
-            margin=dict(t=40, b=0, l=0, r=0), height=250,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee', title='Performance (Base 100)'),
-            showlegend=True, legend=dict(orientation="h", y=1.1)
-        )
-        return fig
-
-    def plot_candlestick_real(df):
-        window = 50 if len(df) > 200 else (20 if len(df) > 50 else 5)
-        df['MA'] = df['Close'].rolling(window=window).mean()
-        fig = go.Figure()
-        
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Prix (OHLC)'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA'], line=dict(color='orange', width=1), name=f'Moyenne {window}j'))
-        
-        fig.update_layout(
-            margin=dict(t=10, b=20, l=0, r=0), height=300, 
-            xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', 
-            plot_bgcolor='rgba(0,0,0,0)', showlegend=True, 
-            legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
-        )
-        return fig
+    # --- KPI HEADER ---
+    var = ((stats['last'] - stats['prev'])/stats['prev'])*100
+    k1, k2, k3, k4 = st.columns(4)
     
-    def plot_price_vs_target_bar(current, target):
-        if not target or target == 0: return go.Figure()
-        upside = ((target - current) / current) * 100
-        color_target = "#2ecc71" if target > current else "#e74c3c"
-        
-        x_vals = ["Prix Actuel", "Objectif Analystes"]
-        y_vals = [current, target]
-        colors = ["#3498db", color_target]
-        
-        fig = go.Figure(go.Bar(
-            x=y_vals, y=x_vals, orientation='h',
-            marker_color=colors, text=[f"{current:.2f}€", f"{target:.2f}€"],
-            textposition='auto'
-        ))
-        fig.update_layout(
-            title=dict(text=f"Potentiel: {upside:+.2f}%", font=dict(color=color_target, size=18)),
-            margin=dict(t=40, b=0, l=0, r=0), height=150,
-            xaxis=dict(showgrid=False, visible=False), yaxis=dict(showgrid=False),
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False
-        )
-        return fig
+    def kpi_card(title, value, detail, detail_color_class, help_text):
+        return f"""
+        <div class="kpi-card">
+            <div style="display: flex; justify-content: center; align-items: center;">
+                <span class="kpi-title">{title}</span>
+                <span class="tooltip-icon" title="{help_text}">?</span>
+            </div>
+            <div class="kpi-value">{value}</div>
+            <div class="kpi-detail {detail_color_class}">{detail}</div>
+        </div>
+        """
+    
+    var_class = "kpi-delta-pos" if var > 0 else "kpi-delta-neg"
+    k1.markdown(kpi_card("PRIX ACTUEL", f"{stats['last']:.2f} €", f"{var:+.2f}%", var_class, "Dernier cours coté à Paris."), unsafe_allow_html=True)
+    
+    sharpe = stats['sharpe']
+    s_cls = "kpi-delta-pos" if sharpe > 1 else ("kpi-delta-neutral" if sharpe > 0 else "kpi-delta-neg")
+    s_txt = "Excellent" if sharpe > 2 else ("Bon" if sharpe > 1 else "Risqué")
+    k2.markdown(kpi_card("SHARPE", f"{sharpe:.2f}", s_txt, s_cls, "Rentabilité ajustée au risque. >1 est solide."), unsafe_allow_html=True)
+    
+    corr = stats['corr_index']
+    c_cls = "kpi-delta-pos" if corr > 0.8 else "kpi-delta-neutral"
+    c_txt = "Suit le CAC" if corr > 0.8 else "Indép."
+    k3.markdown(kpi_card("CORR. CAC40", f"{corr:.2f}", c_txt, c_cls, "1 = Bouge exactement comme l'indice CAC 40."), unsafe_allow_html=True)
+    
+    rsi = hist['RSI'].iloc[-1]
+    r_cls = "kpi-delta-neg" if rsi > 70 else ("kpi-delta-pos" if rsi < 30 else "kpi-delta-neutral")
+    r_txt = "Surchauffe" if rsi > 70 else ("Opportunité" if rsi < 30 else "Neutre")
+    k4.markdown(kpi_card("RSI", f"{rsi:.1f}", r_txt, r_cls, "Indicateur de tension (0-100)."), unsafe_allow_html=True)
+    
+    st.divider()
 
-    def plot_financial_growth(financials):
-        if financials is None or financials.empty: return go.Figure()
-        try:
-            fin_T = financials.T.sort_index().tail(4)
-            dates = fin_T.index.strftime('%Y')
-            rev_key = next((k for k in ['Total Revenue', 'TotalRevenue', 'Revenue'] if k in financials.index), None)
-            inc_key = next((k for k in ['Net Income', 'NetIncome', 'Net Income Common Stockholders'] if k in financials.index), None)
-            if not rev_key or not inc_key: return go.Figure()
-            revenue = fin_T[rev_key]
-            income = fin_T[inc_key]
-        except: return go.Figure()
+    col_score, col_chart = st.columns([1, 3])
+    with col_score:
+        st.subheader("📊 Scorecard")
+        st.markdown(f"""
+        <div class="scorecard">
+            <span class="score-title">VOLATILITÉ <span class="tooltip-icon" title="Écart type journalier">?</span></span>
+            <span style="font-size:1.3em; font-weight:bold;">{stats['volatility_day']:.2f}%</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        wr_color = c_up if stats['win_rate'] > 50 else c_down
+        st.markdown(f"""
+        <div class="scorecard">
+            <span class="score-title">WIN RATE <span class="tooltip-icon" title="% de séances en hausse">?</span></span>
+            <span style="font-size:1.3em; font-weight:bold; color:{wr_color}">{stats['win_rate']:.1f}%</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        vol_txt = "Hausse" if stats['vol_trend'] > 0 else "Baisse"
+        vol_col = c_up if stats['vol_trend'] > 0 else c_down
+        st.markdown(f"""
+        <div class="scorecard">
+            <span class="score-title">VOL TREND <span class="tooltip-icon" title="Volume récent vs moyen terme">?</span></span>
+            <span style="font-size:1.3em; font-weight:bold; color:{vol_col}">{stats['vol_trend']:+.1f}%</span><br>
+            <span style="font-size:0.7em; color:#ccc;">{vol_txt}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="scorecard">
+            <span class="score-title">RANGE <span class="tooltip-icon" title="Plus haut / Plus bas période">?</span></span>
+            <span style="font-size:0.8em; color:#888;">H:</span> <span style="color:{c_up}">{hist['High'].max():.2f}€</span><br>
+            <span style="font-size:0.8em; color:#888;">L:</span> <span style="color:{c_down}">{hist['Low'].min():.2f}€</span>
+        </div>
+        """, unsafe_allow_html=True)
 
+    with col_chart:
+        st.subheader(f"Graphique Technique ({time_frame})")
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=dates, y=revenue, name="Chiffre d'Affaires", marker_color='#3498db'))
-        fig.add_trace(go.Bar(x=dates, y=income, name="Bénéfice Net", marker_color='#2ecc71'))
-
-        fig.update_layout(
-            title=dict(text="Croissance (CA vs Bénéfices)", font=dict(size=14, color="#555")),
-            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee', tickformat=".2s"),
-            margin=dict(t=40, b=20, l=10, r=10), height=200,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            legend=dict(orientation="h", y=-0.2), barmode='group'
-        )
-        return fig
-
-    # --- MISE EN PAGE DÉTAILLÉE ---
-    st.title(f"📊 Analyse Focus : {selected_name}")
-
-    col_left, col_mid, col_right = st.columns([1, 1.5, 1.5], gap="medium")
-
-    with col_left:
-        with st.container():
-            st.write("##### Rendement & Valorisation")
-            st.plotly_chart(plot_dividend_gauge(info['dividend']), use_container_width=True, config={'displayModeBar': False})
-            st.divider()
-            per_val = info['per']
-            per_str = f"{per_val:.1f}x" if per_val and per_val > 0 else "N/A"
-            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Un PER de 15 est la moyenne historique.")
-
-        with st.container():
-            st.write("##### 🎯 Objectif Analystes")
-            if info['targetMeanPrice'] and info['targetMeanPrice'] > 0:
-                st.plotly_chart(plot_price_vs_target_bar(info['last'], info['targetMeanPrice']), use_container_width=True, config={'displayModeBar': False})
-                st.caption(f"Consensus : **{info.get('recommendationKey', 'N/A').upper()}**")
-            else:
-                st.warning("Pas d'objectif de cours disponible.")
-
-    with col_mid:
-        with st.container():
-            st.write("##### Indicateurs Clés")
-            kpi1, kpi2, kpi3 = st.columns(3)
-            var_day = ((info['last'] - info['prev']) / info['prev']) * 100
-            kpi1.metric("Prix", f"{info['last']:.2f}€")
-            kpi2.metric("Var Jour", f"{var_day:+.2f}%", delta=f"{var_day:+.2f}%")
-            kpi3.metric("Market Cap", f"{info['mcap']/1e9:.1f} B€")
-            st.divider()
-            st.write("##### Performances Historiques")
-            st.plotly_chart(plot_performance_bars(hist), use_container_width=True, config={'displayModeBar': False})
-
-        with st.container():
-            if cac40_hist_period is not None and not cac40_hist_period.empty:
-                fig_vs_bench = plot_price_vs_benchmark(hist['Close'], cac40_hist_period, selected_name)
-                st.plotly_chart(fig_vs_bench, use_container_width=True, config={'displayModeBar': False})
-            else:
-                st.warning("Données du benchmark indisponibles.")
-
-    with col_right:
-        with st.container():
-            st.write(f"##### Analyse Technique ({time_period_detail})")
-            st.plotly_chart(plot_candlestick_real(hist), use_container_width=True, config={'displayModeBar': False})
+        fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Prix"))
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA50'], line=dict(color="orange", width=1), name="SMA 50"))
+        if len(hist) > 200:
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA200'], line=dict(color="#00f2c3", width=2), name="SMA 200"))
+        fig.update_layout(height=450, margin=dict(t=10, b=10, l=0, r=0), 
+                          paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                          xaxis_rangeslider_visible=False, yaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                          legend=dict(orientation="h", y=1.02))
         
-        with st.container():
-            st.write("##### 💎 Fondamentaux & Santé")
-            f1, f2, f3 = st.columns(3)
-            margin = info.get('profitMargins', 0)
-            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
-            beta = info.get('beta', 0)
-            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité (1 = moyenne).")
-            debt = info.get('debtToEquity', 0)
-            f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
-            
-            st.divider()
-            
-            st.caption(f"🏢 Secteur : **{info.get('sector', 'N/A')}**")
-            st.plotly_chart(plot_financial_growth(financials), use_container_width=True, config={'displayModeBar': False})
-            
-            # --- AJOUT DE LA NOTE ---
-            st.caption("*Note : 'G' (Giga) = Milliards*") 
-            # ------------------------
+        st.plotly_chart(fig, use_container_width=True)
