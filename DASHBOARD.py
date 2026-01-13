@@ -29,6 +29,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Dictionnaire des tickers
 tickers = {
     "LVMH": "MC.PA", "TOTAL": "TTE.PA", "L'OREAL": "OR.PA", "AIRBUS": "AIR.PA",
     "SCHNEIDER": "SU.PA", "AIR LIQUIDE": "AI.PA", "BNP PARIBAS": "BNP.PA", 
@@ -38,8 +39,19 @@ tickers = {
     "RENAULT": "RNO.PA", "CAPGEMINI": "CAP.PA", "STMICRO": "STMPA.PA"
 }
 
+# Base de données de secours pour les SECTEURS (Car Yahoo plante souvent là-dessus)
+SECTOR_FALLBACK = {
+    "MC.PA": "Luxe & Biens de consommation", "TTE.PA": "Énergie & Pétrole", 
+    "OR.PA": "Cosmétiques", "AIR.PA": "Aéronautique", "SU.PA": "Gestion Énergie",
+    "AI.PA": "Chimie & Gaz", "BNP.PA": "Banque", "GLE.PA": "Banque",
+    "VIE.PA": "Services aux collectivités", "CS.PA": "Assurance", "DG.PA": "Construction",
+    "SAF.PA": "Aéronautique", "RMS.PA": "Luxe", "KER.PA": "Luxe",
+    "SAN.PA": "Santé & Pharma", "EL.PA": "Santé & Optique", "ORA.PA": "Télécoms",
+    "RNO.PA": "Automobile", "CAP.PA": "Technologie", "STMPA.PA": "Semi-conducteurs"
+}
+
 # =========================================================
-# 2. FONCTIONS DE RÉCUPÉRATION INTELLIGENTE
+# 2. FONCTIONS DE RÉCUPÉRATION (ULTRA ROBUSTES)
 # =========================================================
 
 @st.cache_data(ttl=3600)
@@ -49,12 +61,17 @@ def get_global_data():
         try:
             t = yf.Ticker(sym)
             fi = t.fast_info
+            # fast_info est beaucoup plus fiable que info
             last = fi.last_price
             prev = fi.previous_close
             var = ((last - prev) / prev) * 100 if prev else 0
+            
+            # Gestion volume (parfois None)
+            vol = fi.last_volume if fi.last_volume else 0
+            
             global_data.append({
                 "Entreprise": name, "Symbole": sym, "Prix": last,
-                "Variation %": var, "Market Cap": fi.market_cap, "Volume": fi.last_volume
+                "Variation %": var, "Market Cap": fi.market_cap, "Volume": vol
             })
         except: continue
     return pd.DataFrame(global_data)
@@ -62,38 +79,39 @@ def get_global_data():
 @st.cache_data(ttl=3600)
 def get_multi_history(tickers_dict, period="1y"):
     symbols = list(tickers_dict.values())
-    # Utilisation de group_by='ticker' pour simplifier la structure si besoin, mais standard ici.
-    data = yf.download(symbols, period=period, progress=False)['Close']
-    return data
+    try:
+        data = yf.download(symbols, period=period, progress=False)['Close']
+        return data
+    except:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def get_detail_data(symbol, period="1y"):
     """
-    Récupère les données avec une stratégie de repli (Fallback) :
-    Si l'info directe manque, on la calcule à partir des états financiers.
+    Stratégie "Bulldozer" : Si Yahoo ne donne pas l'info, on la calcule nous-mêmes.
     """
     stock = yf.Ticker(symbol)
     
-    # 1. Historique (Critique)
+    # 1. Historique (Indispensable)
     try:
         hist = stock.history(period=period)
-        if hist is None or hist.empty:
-            return None, None, None
+        if hist is None or hist.empty: return None, None, None
     except: return None, None, None
 
-    # 2. Données Prix Fiables
+    # 2. Données "Fast Info" (Très fiable pour Prix et MarketCap)
     try:
         fi = stock.fast_info
         last_price = fi.last_price if fi.last_price else hist['Close'].iloc[-1]
         prev_close = fi.previous_close if fi.previous_close else hist['Close'].iloc[-2]
         mcap = fi.market_cap if fi.market_cap else 0
+        shares_outstanding = fi.shares if fi.shares else 0
     except:
         last_price = hist['Close'].iloc[-1]
         prev_close = hist['Close'].iloc[-2]
         mcap = 0
+        shares_outstanding = 0
 
-    # 3. Récupération Info & Financiers
-    # On récupère tout de suite les bilans car on risque d'en avoir besoin pour les calculs
+    # 3. Récupération des États Financiers (Pour les calculs manuels)
     try: inf = stock.info 
     except: inf = {}
     if inf is None: inf = {}
@@ -104,73 +122,74 @@ def get_detail_data(symbol, period="1y"):
     try: balance_sheet = stock.balance_sheet
     except: balance_sheet = None
 
-    # --- LOGIQUE DE CALCUL DE SECOURS (FALLBACKS) ---
-
-    # A. MARGE NETTE (Profit Margin)
+    # --- CALCULS MANUELS (LA CLÉ DE LA RÉUSSITE) ---
+    
+    # A. Calcul MARGE NETTE
     margin = inf.get('profitMargins')
+    net_income_val = 0
+    revenue_val = 0
+    
     if (margin is None or margin == 0) and financials is not None and not financials.empty:
         try:
-            # Tentative de calcul : Résultat Net / Chiffre d'Affaires
-            # On cherche les clés standards (parfois "Net Income", parfois "Net Income Common Stockholders")
-            net_income = None
-            revenue = None
+            # On cherche Net Income et Revenue peu importe le nom exact
+            ni_row = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
+            rev_row = next((k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k), None)
             
-            # Recherche flexible des clés
-            ni_keys = [k for k in financials.index if 'Net Income' in k or 'NetIncome' in k]
-            rev_keys = [k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k or 'Revenue' in k]
-            
-            if ni_keys and rev_keys:
-                net_income = financials.loc[ni_keys[0]].iloc[0]
-                revenue = financials.loc[rev_keys[0]].iloc[0]
-                
-            if net_income and revenue and revenue != 0:
-                margin = net_income / revenue
+            if ni_row and rev_row:
+                net_income_val = financials.loc[ni_row].iloc[0]
+                revenue_val = financials.loc[rev_row].iloc[0]
+                if revenue_val and revenue_val != 0:
+                    margin = net_income_val / revenue_val
         except: pass
+
+    # B. Calcul PER (Price Earning Ratio) MANUEL
+    # Formule : Prix Action / (Bénéfice Net / Nombre Actions)
+    pe_ratio = inf.get('trailingPE')
     
-    # B. DETTE / FONDS PROPRES (Debt to Equity)
+    if (pe_ratio is None or pe_ratio == 0):
+        # Essai via EPS fourni
+        eps = inf.get('trailingEps')
+        if eps and eps > 0:
+             pe_ratio = last_price / eps
+        # Essai via calcul brut (Si on a le Net Income et le nb d'actions)
+        elif net_income_val != 0 and shares_outstanding != 0:
+            calculated_eps = net_income_val / shares_outstanding
+            if calculated_eps > 0:
+                pe_ratio = last_price / calculated_eps
+
+    # C. DETTE
     debt_equity = inf.get('debtToEquity')
     if (debt_equity is None) and balance_sheet is not None and not balance_sheet.empty:
         try:
-            # Calcul : Total Dette / Capitaux Propres
-            debt_keys = [k for k in balance_sheet.index if 'Total Debt' in k]
-            equity_keys = [k for k in balance_sheet.index if 'Stockholders Equity' in k or 'Total Equity' in k]
-            
-            if debt_keys and equity_keys:
-                total_debt = balance_sheet.loc[debt_keys[0]].iloc[0]
-                total_equity = balance_sheet.loc[equity_keys[0]].iloc[0]
-                if total_equity != 0:
-                    debt_equity = (total_debt / total_equity) * 100 # Yahoo donne ce ratio en pourcentage souvent
+            debt_row = next((k for k in balance_sheet.index if 'Total Debt' in k), None)
+            equity_row = next((k for k in balance_sheet.index if 'Stockholders Equity' in k or 'Total Equity' in k), None)
+            if debt_row and equity_row:
+                debt = balance_sheet.loc[debt_row].iloc[0]
+                equity = balance_sheet.loc[equity_row].iloc[0]
+                if equity != 0:
+                    debt_equity = (debt / equity) * 100
         except: pass
 
-    # C. PER (Price Earning Ratio)
-    pe_ratio = inf.get('trailingPE')
-    if pe_ratio is None:
-        # Essai 1 : Via EPS fourni
-        eps = inf.get('trailingEps')
-        # Essai 2 : Via Financiers (Net Income / Shares) -> Compliqué sans nb d'actions précis
-        # On reste sur le fallback EPS
-        if eps and eps > 0:
-            pe_ratio = last_price / eps
+    # D. SECTEUR (Utilisation du dictionnaire de secours)
+    sector = inf.get('sector')
+    if sector is None or sector == "N/A":
+        sector = SECTOR_FALLBACK.get(symbol, "N/A")
 
-    # D. BETA
-    # Difficile à calculer soi-même sans historique long et indice de ref. 
-    # On garde la valeur brute, mais on met une valeur par défaut de 1.0 (marché) si vraiment absent pour éviter N/A moche
+    # E. BETA & TARGET
+    # Le Beta est très dur à calculer sans télécharger 5 ans de CAC40. On garde l'info Yahoo ou N/A.
     beta = inf.get('beta')
-    
-    # E. OBJECTIF DE COURS
-    target = inf.get('targetMeanPrice')
-    if target is None: target = inf.get('targetMedianPrice', 0)
+    target = inf.get('targetMeanPrice') or inf.get('targetMedianPrice', 0)
 
-    # Construction dictionnaire final
+    # Dictionnaire Final
     data_points = {
         "dividend": inf.get('dividendYield', 0),
         "per": pe_ratio if pe_ratio else 0,
         "targetMeanPrice": target if target else 0,
         "recommendationKey": inf.get('recommendationKey', 'N/A'),
         "profitMargins": margin if margin else 0,
-        "beta": beta if beta else 0, # Si 0, on affichera N/A ou 0
+        "beta": beta if beta else 0, 
         "debtToEquity": debt_equity if debt_equity else 0,
-        "sector": inf.get('sector', 'N/A')
+        "sector": sector
     }
 
     info_dict = {
@@ -239,7 +258,6 @@ if page == "Vue Globale 🌍":
         for name in selected_tickers:
             sym = tickers[name]
             try:
-                # Gestion compatibilité versions yfinance
                 if isinstance(df_history_dynamic.columns, pd.MultiIndex):
                      series = df_history_dynamic.xs(sym, level=1, axis=1) if sym in df_history_dynamic.columns.get_level_values(1) else pd.Series()
                 else:
@@ -252,16 +270,13 @@ if page == "Vue Globale 🌍":
                     first_price = series.iloc[0]
                     normalized_series = ((series - first_price) / first_price) * 100
                     fig_comp.add_trace(go.Scatter(x=series.index, y=normalized_series, mode='lines', name=name, hovertemplate='%{y:.2f}%'))
-            except Exception:
-                continue
+            except: continue
 
         fig_comp.update_layout(hovermode="x unified", margin=dict(t=10, b=0, l=0, r=0), height=450,
                                yaxis_title="Performance (%)", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                                xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee'),
                                legend=dict(orientation="h", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_comp, use_container_width=True)
-    else:
-        st.info("Sélectionnez des entreprises ou attendez le chargement.")
     
     st.divider()
     
@@ -348,13 +363,10 @@ elif page == "Vue Détaillée 🔍":
         df = pd.concat([stock_series, benchmark_series], axis=1, join='inner')
         df.columns = ['Stock', 'Benchmark']
         if df.empty: return go.Figure()
-        
         df = (df / df.iloc[0]) * 100
-        
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df.index, y=df['Stock'], mode='lines', name=stock_name, line=dict(color='#3498db', width=2)))
         fig.add_trace(go.Scatter(x=df.index, y=df['Benchmark'], mode='lines', name=benchmark_name, line=dict(color='#95a5a6', width=2, dash='dot')))
-        
         fig.update_layout(
             title=f"Performance relative vs {benchmark_name} (Base 100)",
             margin=dict(t=40, b=0, l=0, r=0), height=250,
@@ -368,10 +380,8 @@ elif page == "Vue Détaillée 🔍":
         window = 50 if len(df) > 200 else (20 if len(df) > 50 else 5)
         df['MA'] = df['Close'].rolling(window=window).mean()
         fig = go.Figure()
-        
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Prix (OHLC)'))
         fig.add_trace(go.Scatter(x=df.index, y=df['MA'], line=dict(color='orange', width=1), name=f'Moyenne {window}j'))
-        
         fig.update_layout(
             margin=dict(t=10, b=20, l=0, r=0), height=300, 
             xaxis_rangeslider_visible=False, paper_bgcolor='rgba(0,0,0,0)', 
@@ -384,11 +394,9 @@ elif page == "Vue Détaillée 🔍":
         if not target or target == 0: return go.Figure()
         upside = ((target - current) / current) * 100
         color_target = "#2ecc71" if target > current else "#e74c3c"
-        
         x_vals = ["Prix Actuel", "Objectif Analystes"]
         y_vals = [current, target]
         colors = ["#3498db", color_target]
-        
         fig = go.Figure(go.Bar(
             x=y_vals, y=x_vals, orientation='h',
             marker_color=colors, text=[f"{current:.2f}€", f"{target:.2f}€"],
@@ -411,13 +419,10 @@ elif page == "Vue Détaillée 🔍":
         try:
             fin_T = financials.T.sort_index().tail(4)
             dates = fin_T.index.strftime('%Y')
-            
-            # Recherche flexible des colonnes
             rev_key = next((k for k in financials.index if 'Total Revenue' in k or 'TotalRevenue' in k or 'Revenue' in k), None)
             inc_key = next((k for k in financials.index if 'Net Income' in k or 'NetIncome' in k), None)
             
             if not rev_key or not inc_key: return go.Figure()
-            
             revenue = fin_T[rev_key]
             income = fin_T[inc_key]
         except: return go.Figure()
@@ -425,7 +430,6 @@ elif page == "Vue Détaillée 🔍":
         fig = go.Figure()
         fig.add_trace(go.Bar(x=dates, y=revenue, name="Chiffre d'Affaires", marker_color='#3498db'))
         fig.add_trace(go.Bar(x=dates, y=income, name="Bénéfice Net", marker_color='#2ecc71'))
-
         fig.update_layout(
             title=dict(text="Croissance (CA vs Bénéfices)", font=dict(size=14, color="#555")),
             xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#eee', tickformat=".2s"),
@@ -445,9 +449,17 @@ elif page == "Vue Détaillée 🔍":
             st.write("##### Rendement & Valorisation")
             st.plotly_chart(plot_dividend_gauge(info.get('dividend', 0)), use_container_width=True, config={'displayModeBar': False})
             st.divider()
+            
+            # Affichage PER
             per_val = info.get('per', 0)
-            per_str = f"{per_val:.1f}x" if per_val and per_val > 0 else "N/A"
-            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help="Calculé manuellement si indisponible.")
+            if per_val and per_val > 0:
+                per_str = f"{per_val:.1f}x"
+                msg_help = "Ratio Cours/Bénéfice (Calculé manuellement si indisponible via Yahoo)"
+            else:
+                per_str = "N/A"
+                msg_help = "Données insuffisantes pour le calcul."
+                
+            st.metric("PER (Ratio Cours/Bénéfice)", per_str, help=msg_help)
 
         with st.container():
             st.write("##### 🎯 Objectif Analystes")
@@ -462,8 +474,7 @@ elif page == "Vue Détaillée 🔍":
         with st.container():
             st.write("##### Indicateurs Clés")
             kpi1, kpi2, kpi3 = st.columns(3)
-            try:
-                var_day = ((info['last'] - info['prev']) / info['prev']) * 100
+            try: var_day = ((info['last'] - info['prev']) / info['prev']) * 100
             except: var_day = 0
             
             kpi1.metric("Prix", f"{info['last']:.2f}€")
@@ -490,17 +501,18 @@ elif page == "Vue Détaillée 🔍":
             f1, f2, f3 = st.columns(3)
             
             margin = info.get('profitMargins', 0)
-            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette.")
+            f1.metric("Marge Nette", f"{margin*100:.1f}%" if margin else "N/A", help="Rentabilité nette (Calc. Manuel si besoin).")
             
             beta = info.get('beta', 0)
-            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité.")
+            f2.metric("Bêta", f"{beta:.2f}" if beta else "N/A", help="Volatilité (1 = moyenne). Si N/A, donnée manquante chez Yahoo.")
             
             debt = info.get('debtToEquity', 0)
             f3.metric("Dette", f"{debt:.0f}%" if debt else "N/A")
             
             st.divider()
             
-            st.caption(f"🏢 Secteur : **{info.get('sector', 'N/A')}**")
-            st.plotly_chart(plot_financial_growth(financials), use_container_width=True, config={'displayModeBar': False})
+            # Affichage Secteur (Sécurisé)
+            sec = info.get('sector', 'N/A')
+            st.caption(f"🏢 Secteur : **{sec}**")
             
-            st.caption("*Note : Si les données 'N/A' persistent, cela signifie que Yahoo ne fournit ni le résumé ni le bilan comptable pour cette entreprise.*")
+            st.plotly_chart(plot_financial_growth(financials), use_container_width=True, config={'displayModeBar': False})
